@@ -8,6 +8,12 @@ repository = "https://github.com/macourteau/smb1client-rs"
 license = "MIT OR Apache-2.0"
 keywords = ["smb", "cifs", "smb1", "client", "network"]
 categories = ["network-programming", "filesystem"]
+# This repository does not publish to crates.io. The manifest is the guard that
+# holds from any checkout, including a publish attempted by hand; the release
+# workflow carries a second one that stops the workflow running at all. Both are
+# needed, because they fail differently and `release-plz release` publishes any
+# unpublished version — of which 0.1.0 is one.
+publish = false
 # The fixture corpus and the tests deliberately stay in: `cargo test` must pass
 # from the published tarball without reaching the evidence repository.
 exclude = ["/.ci", "/.github", "/docs", "/tools", "CLAUDE.md", "deny.toml", "release-plz.toml"]

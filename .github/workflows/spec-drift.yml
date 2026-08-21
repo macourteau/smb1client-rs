@@ -1,0 +1,22 @@
+name: Specification drift
+
+# The generated status table is checked against its source on a schedule rather
+# than per pull request. Regenerating reaches out to learn.microsoft.com, and a
+# third-party fetch in the critical path of every merge is a flake that blocks
+# work without finding anything: [MS-ERREF] and SMB1 are both frozen, so drift
+# here would be a correction to the specification, not a routine event.
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  status-table:
+    name: NT status table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/gen_status.py --check
