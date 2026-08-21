@@ -1,0 +1,51 @@
+//! An asynchronous SMB1/CIFS client for legacy file servers that speak nothing newer.
+//!
+//! SMB1 is frozen and deprecated. This crate exists because some servers still
+//! speak nothing else, and because the alternatives in the Rust ecosystem do
+//! not cover the dialect: the canonical SMB crate implements SMB2/SMB3 only,
+//! and the most-downloaded alternative is a GPLv3 FFI wrapper around
+//! libsmbclient. A caller reaches a file through [`Client`] → `Tree` → `File`,
+//! and that is the whole opening sequence.
+//!
+//! # Security
+//!
+//! **This crate does not sign messages, and SMB1 has no encryption at all.**
+//! Neither is an oversight to be worked around by configuration; the first is
+//! deliberately deferred and the second the protocol does not offer. Two
+//! consequences follow, and a caller should read them before deciding where to
+//! point this crate:
+//!
+//! - **Every byte on the connection is in the clear**, including file contents
+//!   and the paths that name them. Anyone on the network path reads them.
+//! - **The server is never authenticated.** Because the crate does not sign, it
+//!   has no way to establish that the peer answering is the server it dialled,
+//!   at any point in the connection's life. A hostile or intermediary peer is
+//!   exactly as present after the session setup as before it.
+//!
+//! Authentication itself is NTLMv2, which does protect the password from
+//! anyone merely reading the wire. What it does not do is protect the session
+//! that follows. Treat an SMB1 connection as a plaintext channel to an
+//! unverified peer, and put it on a network where that is acceptable.
+//!
+//! The crate is `#![forbid(unsafe_code)]`, every parser an unauthenticated peer
+//! can reach is fuzzed, and allocation from untrusted input is bounded
+//! wherever it happens.
+//!
+//! # Runtime
+//!
+//! The crate is async-only, on [tokio]. SMB1 is a multiplexed protocol —
+//! requests carry a 16-bit multiplex ID and responses return out of order — so
+//! something must read frames continuously and route each to whichever caller
+//! is waiting. Here that is one task per connection, which owns the socket and
+//! the table of outstanding requests outright; callers hold cheap handles and
+//! await replies. Cancellation is expressed by dropping a future, as it is
+//! everywhere else in async Rust.
+//!
+//! A synchronous caller must either adopt a runtime or block on the futures
+//! itself.
+//!
+//! [tokio]: https://docs.rs/tokio
+
+// The crate declares no modules yet: the build order in the design document
+// brings them up in dependency order, starting with the status table and the
+// wire layer.

@@ -1,0 +1,36 @@
+[package]
+name = "smb1client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A pure-Rust asynchronous SMB1/CIFS client for legacy file servers that speak nothing newer."
+repository = "https://github.com/macourteau/smb1client-rs"
+license = "MIT OR Apache-2.0"
+keywords = ["smb", "cifs", "smb1", "client", "network"]
+categories = ["network-programming", "filesystem"]
+exclude = ["/.github", "/docs"]
+
+[dependencies]
+binrw = "0.15.2"
+digest = "0.11.3"
+getrandom = "0.4.3"
+hmac = "0.13.0"
+md-5 = "0.11.0"
+md4 = "0.11.0"
+rc4 = "0.2.0"
+thiserror = "2.0.20"
+time = "0.3.55"
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt", "sync", "time"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+hex = "0.4.3"
+sha2 = "0.11.0"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

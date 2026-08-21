@@ -1,0 +1,11 @@
+# Build output. Cargo.lock is deliberately NOT here: it is committed, so CI
+# resolves reproducibly and an unrelated pull request does not turn red because
+# a transitive dependency published or was yanked. The library-crate default
+# that excludes it is the single most likely thing to be copied in by mistake.
+target/
+
+# Working notes that belong to a machine and not to the crate.
+*.local.*
+
+# macOS
+.DS_Store
