@@ -71,5 +71,9 @@ mod wire;
 
 pub mod connection;
 
+// Share enumeration: RAP and DCE/RPC `srvsvc`, and the two named-pipe
+// transports underneath the second. `Client::list_shares` is what reaches it.
+pub mod rpc;
+
 pub use error::{Error, Result};
 pub use status::NtStatus;
