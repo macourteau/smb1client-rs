@@ -204,6 +204,21 @@ impl TransactionRequest {
     /// correctly and answered, two shares returned. The defect is reproduced by
     /// the codec so that the first of those re-encodes to its own bytes, and it
     /// is not inherited by anything this crate builds.
+    ///
+    /// **The setup block is empty**, which is a second departure from the
+    /// reference and was found the same way. [MS-RAP] gives a RAP request no
+    /// setup words; the reference hardcodes two zero words. Samba ignores them,
+    /// dispatching on the name — but Windows rejects the frame as malformed and
+    /// answers in DOS error format with `SMB_FLAGS2_NT_STATUS` cleared, which
+    /// says nothing about RAP and reads like an answer to whatever question was
+    /// being asked. `capture-win-rapsetup/` is that refusal.
+    ///
+    /// Their absence moves everything behind them: fourteen words rather than
+    /// sixteen puts the byte area at 63, the name at 64 after its pad, and the
+    /// parameters at 90. `capture-win-rap/0009-c2s-cmd25.bin` carries that
+    /// shape, and is the fixture that pins what this crate sends;
+    /// `capture-rap/` was taken before the setup words were understood and
+    /// still carries the reference's two.
     pub fn rap(parameters: Vec<u8>, data: Vec<u8>) -> Self {
         Self {
             command: command::TRANSACTION,
@@ -212,7 +227,7 @@ impl TransactionRequest {
             max_setup_count: 0,
             flags: 0,
             timeout: 0,
-            setup: vec![0, 0],
+            setup: Vec::new(),
             name: Some(TransactionName::unicode(PIPE_LANMAN)),
             parameters,
             data,
@@ -627,13 +642,16 @@ mod tests {
         ));
     }
 
-    /// `SMB_COM_TRANSACTION` has no committed fixture, so what is asserted is
-    /// the helper's own arithmetic: the name goes in first, and both offsets
-    /// follow from where it left the cursor.
     /// The RAP shape this crate sends, pinned against
-    /// `capture-rap/0009-c2s-cmd25.bin`: two setup words, a UTF-16 name padded
-    /// onto 68, the parameter block at 94, and a `DataOffset` of 114 one pad
-    /// byte past the end of it with no data there.
+    /// `capture-win-rap/0009-c2s-cmd25.bin` — a request Windows parsed rather
+    /// than refused, which is what makes it the oracle here.
+    ///
+    /// **Not** `capture-rap/0009-c2s-cmd25.bin`, which is the same request from
+    /// a harness corrected only for the name: it still carries the reference's
+    /// two zero setup words, and those move every offset behind them. That
+    /// corpus stays in the sweep, and re-encodes to its own bytes, because the
+    /// codec reproduces what a frame contains; it is simply not what this crate
+    /// builds.
     #[test]
     fn a_named_transaction_places_its_blocks_after_the_name() {
         let request = TransactionRequest::rap(
@@ -643,18 +661,28 @@ mod tests {
         assert_eq!(request.command, command::TRANSACTION);
         let encoded = request.encode_body().unwrap();
         let words: RequestWords = read_words(&encoded[1..1 + 28]).unwrap();
-        assert_eq!(words.setup_count, 2);
-        // One pad byte lands the name on 68, 26 bytes of UTF-16 with its
-        // terminator end on 94, and the 19-byte parameter block ends odd, so
-        // one more pad puts `DataOffset` on 114 with no data there.
-        assert_eq!(words.parameter_offset, 94);
+        // No setup words, so fourteen words rather than sixteen put the byte
+        // area on 63. One pad byte lands the name on 64, 26 bytes of UTF-16
+        // with its terminator end on 90, and the 19-byte parameter block ends
+        // odd, so one more pad puts `DataOffset` on 110 with no data there.
+        assert_eq!(words.setup_count, 0);
+        assert_eq!(words.parameter_offset, 90);
         assert_eq!(words.parameter_count, 19);
-        assert_eq!(words.data_offset, 114);
+        assert_eq!(words.data_offset, 110);
         assert_eq!(words.data_count, 0);
         assert_eq!(
-            encoded[1 + 32..1 + 32 + 2],
+            encoded[1 + 28..1 + 28 + 2],
             (1u16 + 26 + 19 + 1).to_le_bytes()
         );
+
+        // The arithmetic above is the crate's; these are the bytes a live
+        // Windows server accepted. A test that only checked the former would
+        // agree with itself.
+        let (_, captured) = crate::wire::fixtures::frame("capture-win-rap/0009-c2s-cmd25.bin");
+        let their_words: RequestWords = read_words(&captured[33..33 + 28]).unwrap();
+        assert_eq!(words.setup_count, their_words.setup_count);
+        assert_eq!(words.parameter_offset, their_words.parameter_offset);
+        assert_eq!(words.data_offset, their_words.data_offset);
     }
 
     /// The named-pipe transact shape, pinned against

@@ -1,0 +1,21 @@
+2026/08/21 16:48:38 relaying 127.0.0.1:10474 -> <windows-vm>, frames to spikes/capture-win-nmpipe/
+2026/08/21 16:48:39 c2s frame 1: nbtype=0x00 len=73 cmd=0x72
+2026/08/21 16:48:39 s2c frame 2: nbtype=0x00 len=127 cmd=0x72
+2026/08/21 16:48:39 c2s frame 3: nbtype=0x00 len=165 cmd=0x73
+2026/08/21 16:48:39 s2c frame 4: nbtype=0x00 len=422 cmd=0x73
+2026/08/21 16:48:39 c2s frame 5: nbtype=0x00 len=527 cmd=0x73
+2026/08/21 16:48:39 s2c frame 6: nbtype=0x00 len=180 cmd=0x73
+2026/08/21 16:48:39 c2s frame 7: nbtype=0x00 len=82 cmd=0x75
+2026/08/21 16:48:39 s2c frame 8: nbtype=0x00 len=48 cmd=0x75
+2026/08/21 16:48:39 c2s frame 9: nbtype=0x00 len=100 cmd=0xa2
+2026/08/21 16:48:39 s2c frame 10: nbtype=0x00 len=103 cmd=0xa2
+2026/08/21 16:48:39 c2s frame 11: nbtype=0x00 len=198 cmd=0x25
+2026/08/21 16:48:39 s2c frame 12: nbtype=0x00 len=148 cmd=0x25
+2026/08/21 16:48:39 c2s frame 13: nbtype=0x00 len=178 cmd=0x25
+2026/08/21 16:48:39 s2c frame 14: nbtype=0x00 len=404 cmd=0x25
+2026/08/21 16:48:39 c2s frame 15: nbtype=0x00 len=41 cmd=0x04
+2026/08/21 16:48:39 s2c frame 16: nbtype=0x00 len=35 cmd=0x04
+2026/08/21 16:48:39 c2s frame 17: nbtype=0x00 len=35 cmd=0x71
+2026/08/21 16:48:39 s2c frame 18: nbtype=0x00 len=35 cmd=0x71
+2026/08/21 16:48:39 c2s frame 19: nbtype=0x00 len=39 cmd=0x74
+2026/08/21 16:48:39 s2c frame 20: nbtype=0x00 len=39 cmd=0x74

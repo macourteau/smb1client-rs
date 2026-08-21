@@ -31,7 +31,7 @@ fn corpus() -> PathBuf {
 }
 
 /// Reads one fixture and strips its NetBIOS header, returning both.
-fn frame(relative: &str) -> (usize, Vec<u8>) {
+pub(super) fn frame(relative: &str) -> (usize, Vec<u8>) {
     let bytes = fs::read(corpus().join(relative)).expect("fixture is readable");
     let header: [u8; netbios::HEADER_LEN] = bytes[..netbios::HEADER_LEN]
         .try_into()
@@ -150,10 +150,23 @@ fn the_header_derive_round_trips_every_committed_frame() {
 /// which is this crate's value plus `SMB_FLAGS2_KNOWS_EAS`. That is the
 /// departure that makes decode-then-re-encode the rule for every
 /// client-to-server frame rather than for a list of exceptions.
+///
+/// One frame does not, and it is the interesting one. Windows answered a
+/// malformed RAP request in **DOS error format**, clearing
+/// `SMB_FLAGS2_NT_STATUS` in its reply — so those four header bytes are an
+/// error class and a code rather than a 32-bit NTSTATUS. A server may do that
+/// however the request was flagged, which is why the exception is named here
+/// rather than filtered away.
 #[test]
 fn no_committed_request_carries_the_flags2_this_crate_sends() {
+    const DOS_FORMAT_REPLY: &str = "capture-win-rapsetup/0010-s2c-cmd25.bin";
+    let mut dos_format = Vec::new();
     for relative in every_frame() {
         let parsed = parse(&relative);
+        if parsed.header().flags2 & super::header::FLAGS2_NT_STATUS == 0 {
+            dos_format.push(relative.clone());
+            continue;
+        }
         assert_eq!(
             parsed.header().flags2,
             0xC803,
@@ -161,6 +174,11 @@ fn no_committed_request_carries_the_flags2_this_crate_sends() {
         );
         assert_eq!(parsed.header().flags2 & FLAGS2_KNOWS_EAS, FLAGS2_KNOWS_EAS);
     }
+    assert_eq!(
+        dos_format,
+        [DOS_FORMAT_REPLY.to_owned()],
+        "the set of frames answering in DOS error format changed"
+    );
     assert_eq!(super::header::FLAGS2_CLIENT, 0xC801);
     assert_eq!(super::header::FLAGS_CLIENT, 0x18);
 }
@@ -233,7 +251,7 @@ fn every_committed_frame_round_trips_through_its_codec() {
     let frames = every_frame();
     // Named so that a corpus that quietly loses frames fails here rather than
     // passing with less to prove.
-    assert_eq!(frames.len(), 244, "the corpus changed size");
+    assert_eq!(frames.len(), 290, "the corpus changed size");
 
     let mut bodyless = Vec::new();
     for relative in frames {
@@ -261,6 +279,8 @@ fn every_committed_frame_round_trips_through_its_codec() {
             "capture-win-a/0012-s2c-cmd32.bin",
             "capture-win-b/0008-s2c-cmd75.bin",
             "capture-win-frag/0008-s2c-cmd75.bin",
+            "capture-win-rap/0010-s2c-cmd25.bin",
+            "capture-win-rapsetup/0010-s2c-cmd25.bin",
         ],
         "the set of frames carrying no command body changed"
     );
@@ -382,6 +402,14 @@ fn a_non_zero_andx_offset_sits_beside_the_sentinel() {
             ("capture-win-b/0016-s2c-cmd74.bin".to_owned(), 39),
             ("capture-win-frag/0010-s2c-cmd75.bin".to_owned(), 54),
             ("capture-win-frag/0072-s2c-cmd74.bin".to_owned(), 39),
+            ("capture-win-nmpipe/0008-s2c-cmd75.bin".to_owned(), 48),
+            ("capture-win-nmpipe/0010-s2c-cmda2.bin".to_owned(), 103),
+            ("capture-win-nmpipe/0020-s2c-cmd74.bin".to_owned(), 39),
+            ("capture-win-rap/0008-s2c-cmd75.bin".to_owned(), 48),
+            ("capture-win-rap/0014-s2c-cmd75.bin".to_owned(), 48),
+            ("capture-win-rap/0016-s2c-cmda2.bin".to_owned(), 103),
+            ("capture-win-rap/0026-s2c-cmd74.bin".to_owned(), 39),
+            ("capture-win-rapsetup/0008-s2c-cmd75.bin".to_owned(), 48),
         ]
     );
 }
