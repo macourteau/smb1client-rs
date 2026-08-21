@@ -63,12 +63,13 @@ pub mod error;
 // callers reach a file through `Client`, `Tree` and `File`, and every message
 // type here is an implementation detail of that path.
 //
-// Its consumer is the connection actor, which is the next piece of the build
-// order; until that exists the whole layer is unreachable from the crate root
-// and every item in it reads as dead. The allow comes off with the actor, and
-// the fixture suite is what holds the layer to account in the meantime.
-#[allow(dead_code)]
+// Its consumer is the connection actor. The encoders for commands no layer
+// issues yet are what still read as dead, and the allow is narrowed to them as
+// each build step brings its own into use; the fixture suite is what holds the
+// layer to account in the meantime.
 mod wire;
+
+pub mod connection;
 
 pub use error::{Error, Result};
 pub use status::NtStatus;
