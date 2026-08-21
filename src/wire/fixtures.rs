@@ -233,7 +233,7 @@ fn every_committed_frame_round_trips_through_its_codec() {
     let frames = every_frame();
     // Named so that a corpus that quietly loses frames fails here rather than
     // passing with less to prove.
-    assert_eq!(frames.len(), 228, "the corpus changed size");
+    assert_eq!(frames.len(), 244, "the corpus changed size");
 
     let mut bodyless = Vec::new();
     for relative in frames {
