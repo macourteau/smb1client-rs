@@ -46,6 +46,9 @@
 //!
 //! [tokio]: https://docs.rs/tokio
 
-// The crate declares no modules yet: the build order in the design document
-// brings them up in dependency order, starting with the status table and the
-// wire layer.
+// The build order in the design document brings the modules up in dependency
+// order. The status table comes before all of them, because nothing that names
+// a status can be written until it exists.
+pub mod status;
+
+pub use status::NtStatus;
