@@ -1,0 +1,15 @@
+2026/08/21 08:11:49 relaying 127.0.0.1:10456 -> 127.0.0.1:10445, frames to spikes/capture-rap/
+2026/08/21 08:11:51 c2s frame 1: nbtype=0x00 len=73 cmd=0x72
+2026/08/21 08:11:51 s2c frame 2: nbtype=0x00 len=159 cmd=0x72
+2026/08/21 08:11:51 c2s frame 3: nbtype=0x00 len=165 cmd=0x73
+2026/08/21 08:11:51 s2c frame 4: nbtype=0x00 len=328 cmd=0x73
+2026/08/21 08:11:51 c2s frame 5: nbtype=0x00 len=473 cmd=0x73
+2026/08/21 08:11:51 s2c frame 6: nbtype=0x00 len=142 cmd=0x73
+2026/08/21 08:11:51 c2s frame 7: nbtype=0x00 len=94 cmd=0x75
+2026/08/21 08:11:51 s2c frame 8: nbtype=0x00 len=48 cmd=0x75
+2026/08/21 08:11:51 c2s frame 9: nbtype=0x00 len=114 cmd=0x25
+2026/08/21 08:11:51 s2c frame 10: nbtype=0x00 len=132 cmd=0x25
+2026/08/21 08:11:51 c2s frame 11: nbtype=0x00 len=35 cmd=0x71
+2026/08/21 08:11:51 s2c frame 12: nbtype=0x00 len=35 cmd=0x71
+2026/08/21 08:11:51 c2s frame 13: nbtype=0x00 len=39 cmd=0x74
+2026/08/21 08:11:51 s2c frame 14: nbtype=0x00 len=39 cmd=0x74
