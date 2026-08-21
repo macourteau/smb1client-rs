@@ -398,10 +398,15 @@ async fn invariant_1_a_gapped_reply_is_never_delivered() {
         peer.next_frame().await.is_none(),
         "nothing more should reach the wire"
     );
+    let start = tokio::time::Instant::now();
     tokio::time::advance(timeouts.per_request + Duration::from_secs(1)).await;
 
     match issuer.await.expect("the issuing task did not panic") {
-        Err(Error::Timeout) => {}
+        Err(Error::Timeout) => assert!(
+            start.elapsed() < timeouts.per_request + Duration::from_secs(5),
+            "the request lapsed only after {:?}",
+            start.elapsed()
+        ),
         Ok(reply) => panic!(
             "200 of 300 declared bytes were delivered as a whole reply: {} bytes",
             reply
@@ -1017,10 +1022,13 @@ async fn the_overall_deadline_caps_the_resets() {
     });
     let mid = mid_of(&peer.frame().await);
 
-    // A fragment every twenty seconds, each contributing a byte, for longer
-    // than the deadline: the per-request clock never expires and the deadline
-    // does.
-    for displacement in 0..20u16 {
+    // A fragment every twenty seconds, each contributing a byte: the
+    // per-request clock never expires, and the deadline does. What is asserted
+    // is *when* — awaiting a request that never lapses would let the paused
+    // clock run on to whatever deadline was left and time out there, so the
+    // outcome alone proves nothing.
+    let start = tokio::time::Instant::now();
+    for displacement in 0..40u16 {
         tokio::time::advance(Duration::from_secs(20)).await;
         if issuer.is_finished() {
             break;
@@ -1032,10 +1040,16 @@ async fn the_overall_deadline_caps_the_resets() {
         )
         .await;
     }
+    let lapsed_after = start.elapsed();
 
     assert!(
         matches!(issuer.await.unwrap(), Err(Error::Timeout)),
         "a request making progress for ever is still bounded by the overall deadline"
+    );
+    assert!(
+        lapsed_after < timeouts.overall + Duration::from_secs(60),
+        "the request went on charging capacity for {lapsed_after:?}, past the {:?} deadline",
+        timeouts.overall
     );
 }
 
@@ -1095,8 +1109,14 @@ async fn a_complete_late_reply_returns_a_lapsed_request_s_id() {
     });
     let lapsed = mid_of(&peer.frame().await);
 
+    let start = tokio::time::Instant::now();
     tokio::time::advance(timeouts.per_request + Duration::from_secs(1)).await;
     assert!(matches!(issuer.await.unwrap(), Err(Error::Timeout)));
+    assert!(
+        start.elapsed() < timeouts.per_request + Duration::from_secs(5),
+        "the request lapsed only after {:?}",
+        start.elapsed()
+    );
 
     // Still holding its id: a partial reply keeps it reserved for exactly as
     // long as the server may still be sending.
@@ -1132,12 +1152,18 @@ async fn a_lapsed_request_is_given_up_on_and_its_id_retired() {
     });
     let lapsed = mid_of(&peer.frame().await);
 
+    let start = tokio::time::Instant::now();
     tokio::time::advance(timeouts.per_request + Duration::from_secs(1)).await;
     assert!(matches!(issuer.await.unwrap(), Err(Error::Timeout)));
+    assert!(
+        start.elapsed() < timeouts.per_request + Duration::from_secs(5),
+        "the request lapsed only after {:?}",
+        start.elapsed()
+    );
 
-    // A server dribbling messages at a request nobody waits on. Were the
-    // give-up clock reset by them, the id would be held for as long as the
-    // server cared to keep sending.
+    // A server dribbling messages at a request nobody waits on, for the whole
+    // of the eight deadlines. Were the give-up clock reset by them, the id
+    // would be held for as long as the server cared to keep sending.
     for displacement in 0..8u16 {
         tokio::time::advance(timeouts.overall).await;
         peer.send(
@@ -1149,11 +1175,13 @@ async fn a_lapsed_request_is_given_up_on_and_its_id_retired() {
     }
     tokio::time::advance(timeouts.overall).await;
 
-    // Retired, not lapsed: a complete reply on the id changes nothing, and a
-    // frame after it is still recognised rather than killing the connection.
-    peer.send(&Fragment::new(lapsed, 8).at(0, vec![9; 8]).encode())
+    // A complete response on that id. A request still Lapsed would take it as
+    // its reply and hand the id back to the pool, after which the second one
+    // would route to nothing and fail the connection. A retired identity
+    // discards both and the connection carries on.
+    peer.send(&bodyless(TRANSACTION2, NtStatus::NO_SUCH_FILE, lapsed))
         .await;
-    peer.send(&Fragment::new(lapsed, 8).at(0, vec![9; 8]).encode())
+    peer.send(&bodyless(TRANSACTION2, NtStatus::NO_SUCH_FILE, lapsed))
         .await;
     let (fresh, _) = round_trip(&connection, &mut peer).await;
     assert_ne!(fresh, lapsed);
@@ -1179,11 +1207,16 @@ async fn the_connection_fails_after_one_deadline_of_silence() {
         }
     });
 
-    for _ in 0..62 {
-        tokio::time::advance(Duration::from_secs(5)).await;
-    }
-
-    caller.await.expect("the calling task did not panic");
+    let start = tokio::time::Instant::now();
+    timeout(timeouts.overall * 3, caller)
+        .await
+        .expect("the connection is failed by the silence rule")
+        .expect("the calling task did not panic");
+    assert!(
+        start.elapsed() < timeouts.overall + Duration::from_secs(60),
+        "the connection survived {:?} of silence with a caller waiting throughout",
+        start.elapsed()
+    );
     assert!(peer.ended().await);
 }
 
@@ -1308,8 +1341,14 @@ async fn a_blocked_write_stops_neither_replies_nor_timers() {
     );
 
     // And still fires timers.
+    let start = tokio::time::Instant::now();
     tokio::time::advance(timeouts.per_request + Duration::from_secs(1)).await;
     assert!(matches!(stalled.await.unwrap(), Err(Error::Timeout)));
+    assert!(
+        start.elapsed() < timeouts.per_request + Duration::from_secs(5),
+        "the timer did not fire behind the stalled write: {:?}",
+        start.elapsed()
+    );
 
     // Dispatch commits at the first byte: the frame goes out whole even though
     // the request that carries it has lapsed in the meantime.

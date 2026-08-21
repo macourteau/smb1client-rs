@@ -16,6 +16,7 @@
 //! its own right.
 
 use std::io;
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{mpsc, oneshot};
@@ -194,16 +195,22 @@ pub(crate) struct Actor<S> {
     closes_done: bool,
     table: RequestTable,
     timeouts: Timeouts,
-    /// Where the current stretch of silence starts: the later of the last
-    /// message to arrive and the moment a caller started waiting on an
-    /// otherwise-idle connection.
+    /// Silence already accumulated over earlier stretches of waiting, and when
+    /// the current stretch began.
     ///
-    /// The window the silence rule measures is silence *a caller spends
-    /// waiting*, so idle time cannot accumulate into it. Measuring from the
-    /// last message alone would fail a connection on the first request after a
-    /// long idle stretch — including the cache's own liveness probe, which
-    /// exists to answer exactly that connection.
-    silence_since: Instant,
+    /// The window the silence rule measures is silence **a caller spends
+    /// waiting**, so it runs only while a request is charging capacity and it
+    /// starts over whenever a message arrives. Neither end of that is optional.
+    /// Measuring from the last message alone would fail a connection on the
+    /// first use after a long idle stretch — including the cache's own liveness
+    /// probe, which exists to answer exactly that connection. Restarting the
+    /// window at each request instead would put it out of reach at the
+    /// defaults, where a request lapses ten times inside one deadline and the
+    /// connection falls idle for an instant between each: that is the very case
+    /// the rule exists for, a caller spending a full per-request timeout on
+    /// every call, for ever.
+    silent_for: Duration,
+    waiting_since: Option<Instant>,
     consecutive_closes: usize,
 }
 
@@ -231,7 +238,8 @@ where
         closes_done: false,
         table: RequestTable::new(limit, timeouts),
         timeouts,
-        silence_since: Instant::now(),
+        silent_for: Duration::ZERO,
+        waiting_since: None,
         consecutive_closes: 0,
     };
     tokio::spawn(actor.run());
@@ -390,11 +398,6 @@ where
             // Dispatch commits at the first byte written: from here the request
             // is on the wire, the actor finishes the frame whatever the caller
             // does or the clock says, and the per-request clock starts.
-            if self.table.charging() == 0 {
-                // A caller starts waiting on a connection nothing was being
-                // asked of, which is where this stretch of silence begins.
-                self.silence_since = Instant::now();
-            }
             self.table.dispatch(
                 queued.mid,
                 queued.command,
@@ -412,6 +415,7 @@ where
         if done {
             self.writing = None;
         }
+        self.note_waiting(Instant::now());
         Ok(())
     }
 
@@ -435,8 +439,14 @@ where
         }
 
         let status = message.header().status;
-        self.silence_since = Instant::now();
-        self.table.accept(message, self.silence_since)?;
+        let now = Instant::now();
+        // The server is answering, so the window starts over — whether the
+        // message completed a reply, continued a reassembly, or only said the
+        // server is still working.
+        self.silent_for = Duration::ZERO;
+        self.waiting_since = None;
+        self.table.accept(message, now)?;
+        self.note_waiting(now);
 
         if status == NtStatus::USER_SESSION_DELETED {
             // Session-scoped, and a connection carries exactly one session, so
@@ -456,17 +466,38 @@ where
         // capacity. A lapsed request does not hold the window open: nobody is
         // waiting on it, and letting it keep the window running would fail a
         // connection nothing was being asked of.
-        if self.table.charging() > 0
-            && now.saturating_duration_since(self.silence_since) >= self.timeouts.overall
-        {
+        if self.waiting_since.is_some() && self.silent_for(now) >= self.timeouts.overall {
             return Err(Error::Silent);
         }
-        self.table.expire(now)
+        let expired = self.table.expire(now);
+        self.note_waiting(now);
+        expired
+    }
+
+    /// Follows the connection in and out of having a caller waiting on it.
+    fn note_waiting(&mut self, now: Instant) {
+        match (self.waiting_since, self.table.charging() > 0) {
+            (None, true) => self.waiting_since = Some(now),
+            (Some(since), false) => {
+                self.silent_for += now.saturating_duration_since(since);
+                self.waiting_since = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// How long the connection has been silent with a caller waiting on it.
+    fn silent_for(&self, now: Instant) -> Duration {
+        self.silent_for
+            + self
+                .waiting_since
+                .map_or(Duration::ZERO, |since| now.saturating_duration_since(since))
     }
 
     fn next_wake(&self) -> Option<Instant> {
-        let silence =
-            (self.table.charging() > 0).then(|| self.silence_since + self.timeouts.overall);
+        let silence = self
+            .waiting_since
+            .map(|since| since + self.timeouts.overall.saturating_sub(self.silent_for));
         match (self.table.next_expiry(), silence) {
             (Some(expiry), Some(silence)) => Some(expiry.min(silence)),
             (expiry, silence) => expiry.or(silence),
