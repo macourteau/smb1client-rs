@@ -57,6 +57,9 @@ impl NegotiateRequest {
 
     /// Decodes a negotiate request. Requests are decoded so that a captured one
     /// can be re-encoded from its own fields.
+    // Reached by the fixture suite alone: this crate builds the request it
+    // sends and never reads one off the wire.
+    #[allow(dead_code)]
     pub fn decode(message: &Message) -> Result<Self, WireError> {
         if message.header().command != command::NEGOTIATE {
             return Err(WireError::UnexpectedCommand {
@@ -190,6 +193,9 @@ impl NegotiateResponse {
 
     /// Encodes the command body, which is what a captured response is
     /// re-encoded through.
+    // Reached by the fixture suite alone, for the same reason as the request
+    // decoder above and in the opposite direction.
+    #[allow(dead_code)]
     pub fn encode_body(&self) -> Result<Vec<u8>, WireError> {
         let mut area = offsets::ByteArea::at(HEADER_LEN + 1 + 34 + 2);
         area.put(&self.server_guid);

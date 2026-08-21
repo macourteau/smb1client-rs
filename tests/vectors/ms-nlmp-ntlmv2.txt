@@ -1,0 +1,70 @@
+# The [MS-NLMP] NTLMv2 worked example, section 4.2 "Cryptographic Values for
+# Validation": 4.2.1 Common Values, 4.2.4.1 Calculations, 4.2.4.2 Results and
+# 4.2.4.3 Messages.
+#
+# These are what CI asserts for `auth/`. Session-setup frames are excluded from
+# the fixture corpus by rule, and they are the only place NTLM and SPNEGO appear
+# on the wire, so these two modules can have no captured coverage of their own.
+# The specification's example stands in, and it is the better oracle in three
+# ways: it fixes the nonce and the timestamp, so the expected bytes are
+# reproducible exactly; it carries no real credential; and it comes from the
+# specification rather than from the reference library's source, which is the
+# same independence the licensing rule asks of the implementation itself.
+#
+# Every value below is transcribed from the published sections named beside it.
+#
+# Format: one `name = hex` per line. `#` opens a comment.
+
+# --- 4.2.1 Common Values -----------------------------------------------------
+# The credentials are the specification's own and belong to nobody.
+user = User
+domain = Domain
+password = Password
+server_challenge = 0123456789abcdef
+client_challenge = aaaaaaaaaaaaaaaa
+# `Time` in the example is zero, which is why the challenge below carries no
+# `MsvAvTimestamp` and the AUTHENTICATE message carries no MIC.
+time = 0000000000000000
+random_session_key = 55555555555555555555555555555555
+
+# --- 4.2.4.1 Calculations ----------------------------------------------------
+# 4.2.4.1.1 NTOWFv2("Password", "User", "Domain")
+ntowfv2 = 0c868a403bfd7a93a3001ef22ef02e3f
+# 4.2.4.1.2 Session Base Key
+session_base_key = 8de40ccadbc14a82f15cb0ad0de95ca3
+# 4.2.4.1.3 temp
+temp = 01010000000000000000000000000000aaaaaaaaaaaaaaaa0000000002000c0044006f006d00610069006e0001000c005300650072007600650072000000000000000000
+
+# --- 4.2.4.2 Results ---------------------------------------------------------
+# 4.2.4.2.2 NTLMv2 Response, whose first sixteen bytes are the NTProofStr.
+nt_proof_str = 68cd0ab851e51c96aabc927bebef6a1c
+nt_challenge_response = 68cd0ab851e51c96aabc927bebef6a1c01010000000000000000000000000000aaaaaaaaaaaaaaaa0000000002000c0044006f006d00610069006e0001000c005300650072007600650072000000000000000000
+# 4.2.4.2.1 LMv2 Response. **This crate does not send it.** NTLMv2 puts the
+# client challenge in the NT response, and [MS-NLMP] 3.1.5.1.2 has such a client
+# send twenty-four zero bytes here instead — which is what the port sends, and
+# what the test asserts of the message it builds. The specification's value is
+# recorded so the divergence is visible rather than implied.
+lmv2_response = 86c35097ac9cec102554764a57cccc19aaaaaaaaaaaaaaaa
+# 4.2.4.2.3 Encrypted Session Key
+encrypted_session_key = c5dad2544fc9799094ce1ce90bc9d03e
+
+# --- 4.2.4.3 Messages --------------------------------------------------------
+challenge_message = 4e544c4d53535000020000000c000c003800000033828ae20123456789abcdef00000000000000002400240044000000060070170000000f53006500720076006500720002000c0044006f006d00610069006e0001000c0053006500720076006500720000000000
+authenticate_message = 4e544c4d5353500003000000180018006c00000054005400840000000c000c00480000000800080054000000100010005c00000010001000d8000000358288e20501280a0000000f44006f006d00610069006e00550073006500720043004f004d005000550054004500520086c35097ac9cec102554764a57cccc19aaaaaaaaaaaaaaaa68cd0ab851e51c96aabc927bebef6a1c01010000000000000000000000000000aaaaaaaaaaaaaaaa0000000002000c0044006f006d00610069006e0001000c005300650072007600650072000000000000000000c5dad2544fc9799094ce1ce90bc9d03e
+
+# The AUTHENTICATE message the *port* builds from the same inputs. It is not the
+# specification's, and the four differences are every one of this crate's
+# deliberate departures made visible in one place:
+#
+#   - `NegotiateFlags` is 0xe0880215, the nine flags, against the example's
+#     0xe2888235;
+#   - `Version` is zero, because `NTLMSSP_NEGOTIATE_VERSION` is not claimed;
+#   - `LmChallengeResponse` is twenty-four zero bytes rather than the LMv2
+#     response above;
+#   - `Workstation` is empty rather than "COMPUTER".
+#
+# What is byte-identical to the specification is everything the cryptography
+# produces: `NtChallengeResponse` is `nt_challenge_response` above and
+# `EncryptedRandomSessionKey` is `encrypted_session_key`. There is no MIC,
+# because the challenge carries no `MsvAvTimestamp`.
+port_authenticate_message = 4e544c4d5353500003000000180018005c00000054005400740000000c000c00480000000800080054000000000000005c00000010001000c8000000150288e0000000000000000044006f006d00610069006e00550073006500720000000000000000000000000000000000000000000000000068cd0ab851e51c96aabc927bebef6a1c01010000000000000000000000000000aaaaaaaaaaaaaaaa0000000002000c0044006f006d00610069006e0001000c005300650072007600650072000000000000000000c5dad2544fc9799094ce1ce90bc9d03e

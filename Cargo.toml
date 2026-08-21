@@ -16,7 +16,7 @@ categories = ["network-programming", "filesystem"]
 publish = false
 # The fixture corpus and the tests deliberately stay in: `cargo test` must pass
 # from the published tarball without reaching the evidence repository.
-exclude = ["/.ci", "/.github", "/docs", "/tools", "CLAUDE.md", "deny.toml", "release-plz.toml"]
+exclude = ["/.ci", "/.github", "/docs", "/fuzz", "/tools", "CLAUDE.md", "deny.toml", "release-plz.toml"]
 
 [dependencies]
 binrw = "0.15.2"

@@ -75,5 +75,73 @@ pub mod connection;
 // transports underneath the second. `Client::list_shares` is what reaches it.
 pub mod rpc;
 
+// NTLMv2 and SPNEGO, written from [MS-NLMP] and RFC 4178. They are public
+// because a caller constructs `Credentials` through them; the messages
+// themselves are the handshake's business.
+pub mod auth;
+
+// Negotiate and session setup, and the session they produce. The handshake runs
+// on a stream handed to it and completes before the connection actor takes
+// ownership, which is what makes the negotiated parameters injectable.
+pub mod session;
+
+pub use auth::{Credentials, Password};
 pub use error::{Error, Result};
+pub use session::{Session, SessionOptions};
 pub use status::NtStatus;
+
+/// The four parsers an unauthenticated peer can reach, as `&[u8] -> Result`
+/// wrappers for `fuzz/`.
+///
+/// They are `#[doc(hidden)]` rather than a feature: a flag would add a second
+/// build configuration for CI to test, when the point is that the tests drive
+/// the same code path a consumer gets. Publishing `wire` instead would make
+/// every message type API. Nothing else should call these — they are not a
+/// stable interface and the crate's versioning promise does not cover them.
+#[doc(hidden)]
+pub mod fuzz {
+    use crate::wire::netbios::HEADER_LEN;
+
+    /// What a fuzz entry point hands back: any error at all, so long as it is
+    /// an error and not a panic.
+    pub type FuzzResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// One NetBIOS-framed SMB message, header and all.
+    pub fn frame(bytes: &[u8]) -> FuzzResult {
+        let Some(header) = bytes
+            .get(..HEADER_LEN)
+            .and_then(|slice| <[u8; HEADER_LEN]>::try_from(slice).ok())
+        else {
+            return Ok(());
+        };
+        let (_, length) = crate::wire::netbios::decode_header(header)?;
+        let body = bytes.get(HEADER_LEN..).unwrap_or_default();
+        let body = &body[..length.min(body.len())];
+        let message = crate::wire::Message::parse(body.to_vec())?;
+        // Reading the parts is the point: a parser that only validates lengths
+        // proves less than one whose accessors are exercised too.
+        let _ = (message.words(), message.byte_area(), message.byte_count());
+        Ok(())
+    }
+
+    /// A negotiate response, which arrives before anything has authenticated.
+    pub fn negotiate_response(bytes: &[u8]) -> FuzzResult {
+        let message = crate::wire::Message::parse(bytes.to_vec())?;
+        let response = crate::wire::negotiate::NegotiateResponse::decode(&message)?;
+        let _ = response.accepted_offered_dialect();
+        Ok(())
+    }
+
+    /// A SPNEGO `NegTokenResp`, decoded as lenient BER.
+    pub fn spnego(bytes: &[u8]) -> FuzzResult {
+        crate::auth::spnego::response_token(bytes)?;
+        Ok(())
+    }
+
+    /// An NTLM CHALLENGE, whose AV pairs are server-supplied and consumed
+    /// before authentication has completed.
+    pub fn ntlm_challenge(bytes: &[u8]) -> FuzzResult {
+        crate::auth::ntlm::Challenge::parse(bytes)?;
+        Ok(())
+    }
+}
