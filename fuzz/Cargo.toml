@@ -1,0 +1,52 @@
+# The fuzz targets are their own workspace: `cargo fuzz` builds them on the
+# nightly toolchain with sanitizer flags the crate itself is never built with,
+# and keeping them out of the crate's workspace keeps that build configuration
+# out of every ordinary `cargo` invocation.
+[package]
+name = "smb1client-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+
+[dependencies.smb1client]
+path = ".."
+
+# The four parsers an unauthenticated peer can reach. They are reached through
+# the crate's `#[doc(hidden)] pub` entry points rather than through a feature
+# flag: a flag would add a second build configuration for CI to test, when the
+# point is that the fuzzers drive the same code path a consumer gets.
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "negotiate_response"
+path = "fuzz_targets/negotiate_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spnego"
+path = "fuzz_targets/spnego.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ntlm_challenge"
+path = "fuzz_targets/ntlm_challenge.rs"
+test = false
+doc = false
+bench = false

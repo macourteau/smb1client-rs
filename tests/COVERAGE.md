@@ -109,3 +109,53 @@ are stated against, and each is proven here rather than assumed.
 held at once, essentially all of them Lapsed, which the retirement budget fails
 the connection long before. The check is enforced in `RequestTable::allocate`
 and is unreachable from a test that does not first defeat the budget.
+
+---
+
+## The handshake's four refusals
+
+Not invariants either, but they belong here for the same reason invariant 4's
+absence does: the design record names each of the four and says where it is
+proven, and **the acceptance container can produce none of them.** The capability
+floor, the `NEGOTIATE_USER_SECURITY` refusal and the `MaxBufferSize` floor all
+need a negotiate response no tested server sends, and the guest-logon refusal
+needs an `Action` bit the container is configured never to set (`map to guest =
+never`). No fixture can stand in, because session-setup frames are excluded from
+the corpus by rule. So all four reach the same seam the invariants do, with the
+handshake run over a scripted server on a `DuplexStream`.
+
+| Test | File | What it proves, and what a wrong implementation does |
+|---|---|---|
+| `a_server_missing_any_required_capability_is_refused_by_name` | `tests/handshake.rs` | Each of the six required bits is dropped in turn and the refusal must name the missing one; the control run with all six present authenticates. A floor that checked one bit, or checked the word against a mask that happens to be non-zero, admits a server missing any of the other five — and `CAP_EXTENDED_SECURITY`'s absence would then surface inside the SPNEGO decoder instead. Each refusal is also asserted to arrive before any `SESSION_SETUP_ANDX` reaches the wire. |
+| `a_share_level_security_server_is_refused` | `tests/handshake.rs` | `SecurityMode = 0x02` — encrypted passwords, share-level security — is refused. That is precisely the value an implementation reading the word for the encrypt-passwords bit alone is satisfied by, which is what the reference library does: it declares `NEGOTIATE_USER_SECURITY` and never tests it, and proceeding sends a password where a share key is expected. |
+| `a_negotiated_buffer_below_the_smb1_minimum_is_refused` | `tests/handshake.rs` | 4,355 is refused naming the field and the floor, 512 — the value a subtraction of 1,024 would wrap on — is refused, and exactly 4,356, which Windows 11 24H2 advertises, passes and reaches the actor. **The check's location is what is being proven**: validating once on arrival is what makes every `MaxBufferSize − 1024` in the chunk-size rules safe by construction. An implementation that validated nowhere, or scattered saturating arithmetic through those subtractions instead, carries a nonsense buffer size forward with no place that said so. |
+| `a_guest_logon_is_refused_on_both_paths` | `tests/handshake.rs` | The `Action` bit is refused on the two-leg exchange **and** on the one-leg one, allowed where the caller asked for guest access, and absent on a named logon. An implementation reading the bit on the second leg only misses it on exactly the exchange where it matters most: a server answering the first `SESSION_SETUP_ANDX` with `STATUS_SUCCESS` has issued no challenge and checked no password, which is the shape a guest downgrade takes. This one has live confirmation as well — the embedded device sets the bit for its `guest` account, and the refusal fired against it. |
+
+Four more tests in the same file cover the conditions those four are stated
+against.
+
+| Test | Rule |
+|---|---|
+| `a_server_that_answers_the_first_leg_with_success_is_asked_nothing_further` | The exchange can end after the first leg: one `SESSION_SETUP_ANDX` where the server issued no challenge, two where it did. |
+| `a_server_that_requires_signing_says_so` | A server admitting to `NEGOTIATE_SECURITY_SIGNATURES_REQUIRED` gets a named error rather than an access-denied further in. |
+| `a_server_answering_outside_nt_status_is_refused` | A response clearing `SMB_FLAGS2_NT_STATUS` is reported as such rather than as a fabricated `NTSTATUS`. |
+| `the_negotiated_parameters_reach_the_actor_as_values`, `the_large_io_capabilities_are_claimed_only_where_the_server_offered_them` | The negotiated parameters reach the actor as construction values, and the client's own `SESSION_SETUP_ANDX` carries the four fields it chooses rather than echoes: the advertised `MaxBufferSize` of 65,535, the multiplex count it then enforces, the echoed `SessionKey`, and its own capability word — `CAP_EXTENDED_SECURITY` included, without which Windows refuses the session setup outright. |
+
+## `auth/` — vectors, not captures
+
+Session-setup frames are excluded from the fixture corpus by rule, and they are
+the only place NTLM and SPNEGO appear on the wire, so those two modules can have
+no captured coverage of their own. Two committed vector files stand in, and they
+are what CI asserts for `auth/`.
+
+| Test | File | What it proves |
+|---|---|---|
+| `the_ms_nlmp_worked_example_is_reproduced` | `tests/auth.rs` | The whole NTLMv2 pipeline against [MS-NLMP] 4.2.4's published worked example: `NtChallengeResponse` and `EncryptedRandomSessionKey` byte for byte, the `LmChallengeResponse` of twenty-four zero bytes that says NTLMv2 only, and the whole message pinned. The example fixes the nonce and the timestamp, carries no real credential, and comes from the specification rather than from the reference library's source. |
+| `the_negotiate_message_carries_the_nine_flags` | `tests/auth.rs` | The nine flags read off the bytes the NEGOTIATE message actually carries, with `ALWAYS_SIGN` and `VERSION` absent and `SIGN` present — the last being the one whose removal makes Windows refuse authentication outright. |
+| `the_reference_library_agrees_on_every_value_the_two_share` | `tests/auth.rs` | The behavioural cross-check against the reference library at `b948f59`: both SPNEGO encoders byte for byte, the decoder on the token the reference received, the NTLMv2 blob and `NTProofStr` over the reference's own AV pair list, and the `mechListMIC` — which is the whole of `SIGNKEY`, `SEALKEY`, the HMAC and the RC4 that encrypts the checksum — on a session key the port did not choose. The run drove the reference against a scripted server answering with the specification's own challenge, so the committed vectors carry no captured frame and no real credential. |
+| `credentials_never_reach_a_formatted_string` | `tests/auth.rs` | The redacted `Debug` on the password, the credentials, the client values and the AUTHENTICATE message. A redacted `Debug` is exactly what a later `#[derive(Debug)]` silently undoes, so its effect is asserted rather than assumed. |
+| `the_session_setup_is_redacted_however_the_switch_is_set`, `a_session_setup_dump_keeps_the_header_and_nothing_else` | `src/wire/trace.rs` | The wire tracer's redaction, which is unconditional and not behind a feature flag. The case that matters is the one with the operator's dump switch **on**: with it off nothing is dumped anyway. |
+
+**The live half is `tests/live_handshake.rs`, and it is `#[ignore]`d.** It reads
+`SMB1_TEST_SERVER` and authenticates, and nothing in CI points it at anything but
+the pinned container.

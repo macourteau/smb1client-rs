@@ -1,0 +1,85 @@
+# The behavioural cross-check against the Go reference library, pinned at
+# `b948f59`.
+#
+# **Read the licensing rule before touching this file.** NTLM and SPNEGO are
+# written from [MS-NLMP] and RFC 4178 and from nothing else; the reference is
+# consulted only *behaviourally* — the same inputs run through both, and the
+# bytes compared. Never as a structural reference. The values below are the
+# bytes that comparison produced, committed so CI asserts them: the cross-check
+# itself is a development-time run and nothing in CI checks out that repository.
+#
+# **The credentials are the [MS-NLMP] worked example's**, and nobody holds them.
+# The run drove the reference library against a scripted SMB1 server answering
+# with the specification's own CHALLENGE_MESSAGE, so no captured session-setup
+# frame and no real credential is committed here — which is the corpus rule
+# these two modules could not otherwise satisfy.
+#
+# The scripted challenge is the specification's, with two documented edits:
+# `NTLMSSP_REQUEST_TARGET` is set, which the reference requires and refuses a
+# challenge without, and one fixed `MsvAvTimestamp` is appended so the exchange
+# runs the MIC path a real server's timestamp puts a client on. Both edits are
+# in the committed bytes and neither is a property of the port.
+#
+# Format: one `name = hex` per line. `#` opens a comment.
+
+user = User
+domain = Domain
+password = Password
+
+# The DER MechTypeList both sides offer. The mechListMIC is computed over
+# exactly these bytes, tag and length included.
+reference_mech_list = 300c060a2b06010401823702020a
+
+# The reference NEGOTIATE message. Its flags are 0xe2888215 — the port nine
+# plus NTLMSSP_NEGOTIATE_ALWAYS_SIGN plus NTLMSSP_NEGOTIATE_VERSION — and its
+# Version field claims Windows 10. Both are what the port drops.
+reference_negotiate_message = 4e544c4d5353500001000000158288e2000000000000000000000000000000000a0000000000000f
+
+# The GSS-API wrapped NegTokenInit the reference sent. The port encoder,
+# given the message above as its mechToken, must reproduce this byte for byte:
+# the wrapper, the OID, the mechTypes and the octet string are the whole of
+# what the DER encoder decides.
+reference_neg_token_init = 604806062b0601050502a03e303ca00e300c060a2b06010401823702020aa22a04284e544c4d5353500001000000158288e2000000000000000000000000000000000a0000000000000f
+
+# The scripted CHALLENGE the reference answered.
+challenge_message = 4e544c4d53535000020000000c000c003800000037828ae20123456789abcdef00000000000000003000300044000000060070170000000f53006500720076006500720002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd0100000000
+
+# The reference AUTHENTICATE message.
+reference_authenticate_message = 4e544c4d5353500003000000180018006c0000007c007c00840000000c000c0058000000080008006400000000000000000000001000100000010000158288e20a0000000000000f6c62dbfaf6752fafd7a43db4bdc647e544006f006d00610069006e005500730065007200000000000000000000000000000000000000000000000000ab0ec1efed6af6105b64bd22b66ee1b60101000000000000880b7e22bb31dd0165d2bb775020a0390000000002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd0106000400020000000a001000000000000000000000000000000000000000000000000000f4e77dafd0524b48482c896b32030773
+
+# The reference mechListMIC. Reproducing it exercises SIGNKEY, SEALKEY, the
+# HMAC and the RC4 that encrypts the checksum, on a key the port did not choose.
+reference_mech_list_mic = 01000000a1b511fcb93dad3200000000
+
+# The NegTokenResp the reference sent back. The port encoder, given the two
+# values above, must reproduce this byte for byte.
+reference_neg_token_resp = a18201303082012ca2820114048201104e544c4d5353500003000000180018006c0000007c007c00840000000c000c0058000000080008006400000000000000000000001000100000010000158288e20a0000000000000f6c62dbfaf6752fafd7a43db4bdc647e544006f006d00610069006e005500730065007200000000000000000000000000000000000000000000000000ab0ec1efed6af6105b64bd22b66ee1b60101000000000000880b7e22bb31dd0165d2bb775020a0390000000002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd0106000400020000000a001000000000000000000000000000000000000000000000000000f4e77dafd0524b48482c896b32030773a312041001000000a1b511fcb93dad3200000000
+
+# The nonce the reference drew, recovered from its own response blob.
+client_challenge = 65d2bb775020a039
+
+# The session key the reference drew, recovered by decrypting its
+# EncryptedRandomSessionKey under the key exchange key.
+exported_session_key = 7308bb8c61272a5addb26909e3cdf514
+
+# The reference NTLMv2 blob. It carries one AV pair the port does not add,
+# MsvAvChannelBindings, so the port temp over the same challenge differs here
+# and the equality below is asserted over a challenge carrying this list.
+reference_temp = 0101000000000000880b7e22bb31dd0165d2bb775020a0390000000002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd0106000400020000000a001000000000000000000000000000000000000000000000000000
+
+# The NTProofStr over that blob.
+reference_nt_proof_str = ab0ec1efed6af6105b64bd22b66ee1b6
+
+# A challenge whose TargetInfo is the reference own AV pair list, so the port
+# builds the identical temp and the NTProofStr comparison is a comparison of
+# the cryptography rather than of the AV pair policy.
+challenge_carrying_reference_av_pairs = 4e544c4d5353500002000000000000003800000037828ae20123456789abcdef00000000000000004c004c0038000000000000000000000002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd0106000400020000000a0010000000000000000000000000000000000000000000
+
+# What the port builds from the scripted challenge with the reference nonce
+# and session key. It is not the reference message — the flags, the Version,
+# the LM response and the channel bindings all differ deliberately — and it is
+# pinned here as an expected value, computed by an implementation written
+# independently of the Rust and verified against the reference on every value
+# the two do share.
+port_authenticate_message = 4e544c4d5353500003000000180018006c00000068006800840000000c000c00580000000800080064000000000000006c00000010001000ec000000150288e00000000000000000634bcb624770f5fcbdc3d7637f7bcfb144006f006d00610069006e005500730065007200000000000000000000000000000000000000000000000000b1d7e4b750a82081a7427386cd72f0370101000000000000880b7e22bb31dd0165d2bb775020a0390000000002000c0044006f006d00610069006e0001000c0053006500720076006500720007000800880b7e22bb31dd010600040002000000000000000000000081bd2b319b11e229ee95616f2d194462
+

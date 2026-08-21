@@ -44,14 +44,14 @@ pub mod header;
 #[allow(dead_code)]
 pub mod io;
 /// `SMB_COM_NEGOTIATE`, issued by the handshake.
-#[allow(dead_code)]
 pub mod negotiate;
 pub mod netbios;
 pub mod offsets;
-/// `SESSION_SETUP_ANDX` and `LOGOFF_ANDX`, issued by the handshake and the
-/// teardown.
+/// `SESSION_SETUP_ANDX` and `LOGOFF_ANDX`. The setup is issued by the
+/// handshake; the logoff by the teardown, which arrives with the caching layer.
 #[allow(dead_code)]
 pub mod session;
+pub mod trace;
 /// The response side is what the actor reassembles; the request side is built
 /// by the layers that issue transactions, at build steps 4 and 5.
 #[allow(dead_code)]
