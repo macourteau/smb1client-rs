@@ -1,0 +1,59 @@
+name: Dependabot automerge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - uses: dependabot/fetch-metadata@v3
+        id: meta
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether this update may merge itself
+        id: decide
+        env:
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          PREVIOUS: ${{ steps.meta.outputs.previous-version }}
+        run: |
+          set -eu
+          verdict=hold
+          reason="majors wait for a human"
+
+          if [ "$ECOSYSTEM" = "github_actions" ]; then
+            verdict=merge
+            reason="actions bumps automerge including majors"
+          elif [ "$UPDATE_TYPE" != "version-update:semver-major" ]; then
+            # Below 1.0 a minor bump IS a breaking change under Cargo's caret
+            # semantics, and Dependabot still labels it `semver-minor`. This is
+            # the floor the design document requires as mechanism rather than as
+            # a list of per-dependency `ignore` rules: a list is silently
+            # incomplete the moment a new 0.x dependency is added, and half this
+            # crate's graph is pre-1.0 by necessity.
+            major=${PREVIOUS%%.*}
+            if [ "$major" = "0" ] && [ "$UPDATE_TYPE" != "version-update:semver-patch" ]; then
+              reason="pre-1.0 minor of $PREVIOUS is a breaking change under Cargo's semantics"
+            else
+              verdict=merge
+              reason="$UPDATE_TYPE from $PREVIOUS"
+            fi
+          fi
+
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "$verdict: $reason"
+
+      - name: Approve and enable auto-merge
+        if: steps.decide.outputs.verdict == 'merge'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr review "$PR_URL" --approve
+          gh pr merge "$PR_URL" --auto --squash

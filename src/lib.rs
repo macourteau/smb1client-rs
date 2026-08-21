@@ -4,7 +4,7 @@
 //! speak nothing else, and because the alternatives in the Rust ecosystem do
 //! not cover the dialect: the canonical SMB crate implements SMB2/SMB3 only,
 //! and the most-downloaded alternative is a GPLv3 FFI wrapper around
-//! libsmbclient. A caller reaches a file through [`Client`] → `Tree` → `File`,
+//! libsmbclient. A caller reaches a file through `Client` → `Tree` → `File`,
 //! and that is the whole opening sequence.
 //!
 //! # Security

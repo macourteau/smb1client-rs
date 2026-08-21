@@ -1,0 +1,34 @@
+[graph]
+# Development dependencies are covered without configuration: they are in the
+# graph already, `exclude-dev` defaulting to false. Note that `include-dev` is
+# not a key of this tool at all — writing it is a hard config error that stops
+# cargo-deny starting.
+
+[advisories]
+version = 2
+# No exceptions are needed. Neither `md4` nor `rc4` carries an advisory: both
+# are weak primitives, and NTLMv2 requires them regardless of what a modern
+# protocol would choose.
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+# The allowlist is a statement of what this project accepts, not an inventory of
+# what today's graph happens to carry, so an unused entry is not a finding.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

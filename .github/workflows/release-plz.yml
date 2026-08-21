@@ -1,0 +1,79 @@
+# The filename is load-bearing and must not change: crates.io matches a Trusted
+# Publishing configuration by workflow *filename*, so renaming this file breaks
+# publishing silently rather than loudly.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Publish whatever the merged release pull request left unpublished.
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push tags, create releases
+      pull-requests: read    # detect the release PR and its commits
+      id-token: write        # exchange for a short-lived crates.io token
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      # Trusted Publishing over OIDC: no registry token is stored anywhere.
+      # Note the bootstrap caveat — a crate that does not yet exist on crates.io
+      # cannot be published this way, so the very first publish needs a token.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  # Maintain the release pull request that carries the next version and changelog.
+  release-pr:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      # The App token is not a convenience. A pull request opened with the
+      # default GITHUB_TOKEN triggers no workflows at all, so under branch
+      # protection the release PR could never satisfy its own required check
+      # and releases would deadlock silently.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        id: release-plz
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      # Auto-merge is what keeps releases unattended. It is the same trust model
+      # already accepted for dependency updates, and the required check remains
+      # the actual merge gate.
+      - name: Enable auto-merge on the release pull request
+        if: steps.release-plz.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ fromJSON(steps.release-plz.outputs.pr).html_url }}
+        run: gh pr merge "$PR" --auto --squash

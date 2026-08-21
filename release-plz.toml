@@ -1,0 +1,13 @@
+[workspace]
+# The changelog is the release note: generated release notes read from merged
+# pull requests, and this repository's history is not pull-request shaped.
+changelog_update = true
+git_release_enable = true
+git_tag_enable = true
+
+# The crate stays pre-1.0 until its API has been exercised by a real consumer.
+# Under Cargo's semantics every 0.x minor is incompatible, so a breaking change
+# is a minor bump and what protects a consumer from an unreviewed breaking
+# release is the resolver rather than review.
+allow_dirty = false
+publish = true

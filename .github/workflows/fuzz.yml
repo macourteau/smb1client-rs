@@ -1,0 +1,38 @@
+name: Fuzz
+
+# Weekly and scheduled, deliberately not a pull-request check: fuzzing on a pull
+# request either finds nothing within the budget it is given or blocks a merge
+# on a run nobody sized for it. The job exists because a fuzz target nobody runs
+# is decoration — it compiles, it is never exercised, and the crate's hardening
+# claim is the thing that rests on it.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The four parsers an unauthenticated peer can reach. They are not a
+        # trust boundary — the crate does not sign, so it never authenticates
+        # the server at any point — they are where hardening starts.
+        target: [frame, negotiate_response, spnego, ntlm_challenge]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600

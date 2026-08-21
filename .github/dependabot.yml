@@ -1,0 +1,38 @@
+version: 2
+
+# Note what is deliberately absent: there is no `docker` ecosystem entry, and
+# adding one would be a mistake rather than an improvement. The only Dockerfile
+# here is `.ci/samba/Dockerfile`, the acceptance container, which is the entire
+# automatic acceptance gate. Some distributions build Samba without the SMB1
+# server and upstream is actively removing SMB1 server support, so an automerged
+# base-image bump that silently produced a container which no longer speaks NT1
+# would delete the oracle rather than fail loudly. There is no consumer exposure
+# and no advisory pressure, so there is no reason to update it except
+# deliberately. See `.ci/samba/README.md`.
+
+updates:
+  # Cargo is deliberately ungrouped. The automerge workflow withholds automerge
+  # from any pre-1.0 dependency's minor bump, and that decision reads
+  # `previous-version` from the update's metadata — which is not meaningful on a
+  # grouped pull request, where `update-type` is the highest change across the
+  # whole group. Grouping here would silently defeat the floor.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

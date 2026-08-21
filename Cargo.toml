@@ -8,7 +8,9 @@ repository = "https://github.com/macourteau/smb1client-rs"
 license = "MIT OR Apache-2.0"
 keywords = ["smb", "cifs", "smb1", "client", "network"]
 categories = ["network-programming", "filesystem"]
-exclude = ["/.github", "/docs"]
+# The fixture corpus and the tests deliberately stay in: `cargo test` must pass
+# from the published tarball without reaching the evidence repository.
+exclude = ["/.ci", "/.github", "/docs", "/tools", "CLAUDE.md", "deny.toml", "release-plz.toml"]
 
 [dependencies]
 binrw = "0.15.2"
