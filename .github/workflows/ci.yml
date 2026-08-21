@@ -24,7 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned rather than floating, and the reason is the self-maintenance
+      # priority rather than caution. `-D warnings` against `@stable` means every
+      # six-week Rust release can turn this check red on a crate nobody has
+      # touched — new lints arrive, and the first anyone knows of it is a merge
+      # that will not land. The weekly `Specification drift` workflow runs clippy
+      # on `stable` without gating anything, so a new lint arrives as a scheduled
+      # signal instead. Bump this deliberately when that job reports.
+      - uses: dtolnay/rust-toolchain@1.98
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2

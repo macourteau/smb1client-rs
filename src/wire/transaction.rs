@@ -548,8 +548,10 @@ fn decode_name(byte_area_offset: usize, region: &[u8]) -> Result<TransactionName
         && units.len().is_multiple_of(2)
         && units.ends_with(&[0, 0])
         && !units[..units.len() - 2]
-            .chunks_exact(2)
-            .any(|unit| unit == [0, 0])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|unit| unit == &[0, 0])
     {
         return Ok(TransactionName {
             text: super::from_utf16("Name", 0, &units[..units.len() - 2])?,
@@ -578,8 +580,10 @@ fn setup_words(message: &Message, fixed: u8, declared: u8) -> Result<Vec<u16>, W
         length: words.len(),
     })?;
     Ok(raw
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
         .collect())
 }
 

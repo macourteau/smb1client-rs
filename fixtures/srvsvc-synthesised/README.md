@@ -20,11 +20,22 @@ embedded device. That capture is git-excluded and stays that way: it names that
 device's real shares, and the corpus rule (see the design doc, *Fixture
 obligations*, and the reasons written into the repository's `.gitignore`) is
 that nothing carrying real share names, filenames or file bytes off someone's
-device is committed, whatever else it would prove. Re-capturing the same
-exchange against the project's Samba container is not open either: the container
-answers RAP and so never reaches this fallback at all, and stock Samba has no
-setting that refuses `SMB_COM_TRANSACTION` while still serving the share. So the
-path is: rebuild the frames, with the device's content replaced.
+device is committed, whatever else it would prove. So the path taken here was:
+rebuild the frames, with the device's content replaced.
+
+**Re-capturing the exchange against the container turned out to be open, and
+this note previously said it was not.** The reasoning was that stock Samba has
+no setting refusing `SMB_COM_TRANSACTION` while still serving the share, which
+is true — and beside the point, because the trigger is client-side. The
+reference library writes the transaction `Name` as 8-bit ASCII under a header
+setting `SMB_FLAGS2_UNICODE`, so the container refuses every transaction it
+sends and falls through to the write/read mode. `spikes/capture-trans/` is that
+capture, against the synthetic container, and `spikes/capture-rap/` is the same
+container answering RAP once the name is spelled correctly.
+
+These frames are kept regardless: they carry the embedded device's shape of the
+exchange, which the container cannot produce, and that device is the one server
+that forces the fallback for a client with no such defect.
 
 ## The scrub is length-preserving, and it has to stay that way
 

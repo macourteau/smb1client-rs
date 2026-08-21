@@ -14,6 +14,21 @@ permissions:
   contents: read
 
 jobs:
+  toolchain:
+    name: Clippy on current stable
+    runs-on: ubuntu-latest
+    # Deliberately not a required check and deliberately not gating anything.
+    # CI pins its toolchain so a new lint cannot block a merge; this is what
+    # makes sure a new lint is still seen. A failure here is a note to bump the
+    # pin in ci.yml, not a defect.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+
   status-table:
     name: NT status table
     runs-on: ubuntu-latest

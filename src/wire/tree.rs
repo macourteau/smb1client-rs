@@ -220,8 +220,10 @@ impl TreeDisconnect {
 /// Finds the null terminator of a UTF-16LE string.
 fn find_utf16_terminator(bytes: &[u8]) -> Result<usize, WireError> {
     bytes
-        .chunks_exact(2)
-        .position(|pair| pair == [0, 0])
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .position(|pair| pair == &[0, 0])
         .map(|units| units * 2)
         .ok_or(WireError::Truncated {
             part: "UTF-16 string terminator",

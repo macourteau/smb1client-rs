@@ -48,6 +48,17 @@ cargo package --locked
 cargo deny check
 ```
 
+**Check which clippy answers before trusting a clean run.** `cargo clippy`
+resolves `cargo-clippy` from `PATH`, so a package-manager copy shadows rustup's
+even under `rustup run` — which means a stale clippy can report a clean tree
+that CI then rejects on lints it never knew about. `cargo clippy --version`
+should match the toolchain CI pins in `.github/workflows/ci.yml`; if it does
+not, put the toolchain's own bin directory first:
+
+```sh
+export PATH="$(rustc --print sysroot)/bin:$PATH"
+```
+
 The MSRV leg. This is the only thing that checks the crate's own code compiles
 on the floor it declares — the 2024 edition's resolver is MSRV-aware for
 dependency *selection* only, so without it the declared version is an unverified
