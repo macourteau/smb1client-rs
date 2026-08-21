@@ -126,11 +126,16 @@ pub struct Request {
     body: Vec<u8>,
     max_parameter_count: u16,
     max_data_count: u16,
-    transaction: bool,
 }
 
 impl Request {
     /// A request whose reply arrives in one message.
+    ///
+    /// Whether a reply is reassembled is decided by the command and not by
+    /// which constructor built the request, so a transaction built here is
+    /// still reassembled — against a bound of nothing, which the first reply
+    /// carrying any bytes fails as [`ReassemblyError::MoreThanAsked`]. Use
+    /// [`Request::transaction`] for those.
     pub fn new(command: u8, tid: u16, uid: u16, body: Vec<u8>) -> Self {
         Self {
             command,
@@ -139,7 +144,6 @@ impl Request {
             body,
             max_parameter_count: 0,
             max_data_count: 0,
-            transaction: false,
         }
     }
 
@@ -166,7 +170,6 @@ impl Request {
             body,
             max_parameter_count,
             max_data_count,
-            transaction: true,
         }
     }
 

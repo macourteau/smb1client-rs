@@ -366,9 +366,15 @@ where
                 }
             };
 
-        let assembly = request
-            .transaction
-            .then(|| Assembly::new(request.max_parameter_count, request.max_data_count));
+        // What decides that a reply is reassembled is the command, so a
+        // transaction built without its bounds fails loudly on the first reply
+        // that carries bytes rather than quietly delivering one fragment as the
+        // whole of it.
+        let assembly = matches!(
+            request.command,
+            command::TRANSACTION | command::TRANSACTION2
+        )
+        .then(|| Assembly::new(request.max_parameter_count, request.max_data_count));
         self.writing = Some(Writing {
             frame,
             cursor: 0,
@@ -394,7 +400,12 @@ where
             .writing
             .as_mut()
             .expect("a write reported progress without one in progress");
-        if let Some(queued) = writing.queued.take() {
+        let queued = writing.queued.take();
+        writing.cursor += written;
+        let done = writing.cursor >= writing.frame.len();
+
+        let now = Instant::now();
+        if let Some(queued) = queued {
             // Dispatch commits at the first byte written: from here the request
             // is on the wire, the actor finishes the frame whatever the caller
             // does or the clock says, and the per-request clock starts.
@@ -403,19 +414,13 @@ where
                 queued.command,
                 queued.reply,
                 queued.assembly,
-                Instant::now(),
+                now,
             );
         }
-        let writing = self
-            .writing
-            .as_mut()
-            .expect("a write reported progress without one in progress");
-        writing.cursor += written;
-        let done = writing.cursor >= writing.frame.len();
         if done {
             self.writing = None;
         }
-        self.note_waiting(Instant::now());
+        self.note_waiting(now);
         Ok(())
     }
 
