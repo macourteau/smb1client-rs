@@ -30,6 +30,17 @@ jobs:
         target: [frame, negotiate_response, spnego, ntlm_challenge]
     steps:
       - uses: actions/checkout@v7
+      # A legible failure rather than a confusing one from cargo-fuzz. The four
+      # targets are written alongside the parsers they cover, so this job is red
+      # from the moment it is scheduled until they land — which is the pressure
+      # it exists to apply. A fuzz target nobody runs is decoration.
+      - name: Check the targets exist
+        run: |
+          test -f fuzz/Cargo.toml || {
+            echo "fuzz/ does not exist: the four fuzz targets the design record" >&2
+            echo "requires are written with the parsers they cover." >&2
+            exit 1
+          }
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2

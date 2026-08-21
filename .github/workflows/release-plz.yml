@@ -10,11 +10,20 @@ on:
 permissions:
   contents: read
 
+# Both jobs are gated on the RELEASE_ENABLED repository variable, and stay
+# skipped until it is set to "true". Releasing is not merely unconfigured before
+# then, it is wrong: the crate is unpublished and private until it works, and
+# `release-plz release` would otherwise try to publish 0.1.0 on the first push to
+# main. There is also a bootstrap order to respect — a crate that does not yet
+# exist on crates.io cannot be published through Trusted Publishing, so the first
+# publish is a deliberate manual one with a token, after which the token is
+# removed and per-crate token publishing is disabled.
 jobs:
   # Publish whatever the merged release pull request left unpublished.
   release:
     name: Release
     runs-on: ubuntu-latest
+    if: vars.RELEASE_ENABLED == 'true'
     permissions:
       contents: write        # push tags, create releases
       pull-requests: read    # detect the release PR and its commits
@@ -41,6 +50,7 @@ jobs:
   release-pr:
     name: Release PR
     runs-on: ubuntu-latest
+    if: vars.RELEASE_ENABLED == 'true'
     permissions:
       contents: write
       pull-requests: write
