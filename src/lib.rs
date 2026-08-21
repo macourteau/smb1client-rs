@@ -59,6 +59,11 @@ pub mod cifs_status;
 // its failures through.
 pub mod error;
 
+// UNC paths, and the policy every share-relative path is held to. Nothing here
+// touches the network: it is what decides what a request may carry before one
+// is built.
+pub mod unc;
+
 // The wire layer is the crate's codec and is deliberately not public surface:
 // callers reach a file through `Client`, `Tree` and `File`, and every message
 // type here is an implementation detail of that path.
@@ -89,6 +94,7 @@ pub use auth::{Credentials, Password};
 pub use error::{Error, Result};
 pub use session::{Session, SessionOptions};
 pub use status::NtStatus;
+pub use unc::{Server, SharePath, UncPath};
 
 /// The four parsers an unauthenticated peer can reach, as `&[u8] -> Result`
 /// wrappers for `fuzz/`.
