@@ -177,11 +177,19 @@ impl Ipc {
 
     /// Enumerates the server's shares.
     ///
-    /// `server` is the server component of the UNC path the caller named, with
-    /// the port where the caller gave one; it is what the `srvsvc` request
-    /// carries as its `ServerName` and is otherwise unused. RAP is tried first
-    /// and DCE/RPC answers where it cannot.
-    pub async fn list_shares(&self, server: &str) -> Result<Vec<Share>> {
+    /// Takes a [`Server`] rather than a string so that the `ServerName` the
+    /// `srvsvc` request carries is built from the host alone, through the one
+    /// construction path every wire UNC goes through. That is not fastidiousness:
+    /// the reference library leaks the dial port into exactly three places and
+    /// this is the third, and where it does so on the `IPC$` tree connect
+    /// Windows refuses the whole exchange with `STATUS_DUPLICATE_NAME`. A
+    /// `&str` here would leave a caller free to pass the dial address and
+    /// reintroduce it, which is the drift the single path exists to foreclose.
+    ///
+    /// RAP is tried first and DCE/RPC answers where it cannot.
+    pub async fn list_shares(&self, server: &crate::unc::Server) -> Result<Vec<Share>> {
+        let server = server.unc_name();
+        let server = server.as_str();
         let first = match self.over_rap().await {
             Ok(shares) => {
                 debug!(shares = shares.len(), "RAP enumerated the server's shares");

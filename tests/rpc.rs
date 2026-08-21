@@ -32,7 +32,13 @@ const HEADER_LEN: usize = 32;
 const TID: u16 = 0x0E0B;
 const UID: u16 = 0x987C;
 const FID: u16 = 0xE7EA;
-const SERVER: &str = "127.0.0.1:10451";
+/// The server the enumeration names. A `Server` rather than a string,
+/// because `list_shares` takes one so the dial port cannot reach the wire.
+fn server() -> smb1client::unc::Server {
+    "127.0.0.1:10451"
+        .parse()
+        .expect("a server component parses")
+}
 
 const CLOSE: u8 = 0x04;
 const TRANSACTION: u8 = 0x25;
@@ -381,7 +387,7 @@ fn names(shares: &[Share]) -> Vec<&str> {
 #[tokio::test]
 async fn rap_answers_and_neither_dce_rpc_transport_runs() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let request = peer.request(TRANSACTION).await;
     // The RAP shape: no setup words, and `\PIPE\LANMAN` in UTF-16 in the byte
@@ -446,6 +452,34 @@ async fn srvsvc_over_transact(peer: &mut Peer, rounds: &[Vec<u8>]) {
 
     for (round, stub) in rounds.iter().enumerate() {
         let call = peer.request(TRANSACTION).await;
+        if round == 0 {
+            // The dial port never reaches the `ServerName`. This is the third
+            // of the three places the reference library leaks it, and the only
+            // one with no visible symptom — on the `IPC$` tree connect the same
+            // leak makes Windows refuse the whole exchange with
+            // `STATUS_DUPLICATE_NAME`, but here the request is merely wrong.
+            //
+            // `server()` names a port deliberately, so this catches a
+            // `list_shares` that formats the caller's dial address, which is
+            // what an earlier revision of this module documented itself as
+            // doing.
+            let stub = request_data(&call);
+            let text: Vec<u16> = stub
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| u16::from_le_bytes(pair))
+                .collect();
+            let text = String::from_utf16_lossy(&text);
+            assert!(
+                text.contains(r"\\127.0.0.1"),
+                "the ServerName is not the host: {text:?}"
+            );
+            assert!(
+                !text.contains("10451"),
+                "the ServerName carried the dial port: {text:?}"
+            );
+        }
         let pdu = response_pdu(round as u32 + 1, PFC_FIRST | PFC_LAST, stub);
         peer.send(&transaction_reply(&call, NtStatus::SUCCESS, &[], &pdu))
             .await;
@@ -461,7 +495,7 @@ async fn srvsvc_over_transact(peer: &mut Peer, rounds: &[Vec<u8>]) {
 #[tokio::test]
 async fn rap_refused_not_supported_falls_through_to_srvsvc() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares("127.0.0.1").await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -485,7 +519,7 @@ async fn rap_refused_not_supported_falls_through_to_srvsvc() {
 #[tokio::test]
 async fn rap_more_data_falls_through_rather_than_enumerating_nothing() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares("127.0.0.1").await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     // `ERROR_MORE_DATA`: one entry returned of nine available.
@@ -512,7 +546,7 @@ async fn rap_more_data_falls_through_rather_than_enumerating_nothing() {
 #[tokio::test]
 async fn a_rap_reply_short_of_its_own_available_count_falls_through() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares("127.0.0.1").await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     let mut entry = vec![0u8; 20];
@@ -546,7 +580,7 @@ async fn a_rap_reply_short_of_its_own_available_count_falls_through() {
 #[tokio::test]
 async fn a_refused_transact_falls_through_to_write_and_read() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -618,7 +652,7 @@ async fn a_refused_transact_falls_through_to_write_and_read() {
 #[tokio::test]
 async fn the_read_loop_collects_a_response_that_did_not_fit_one_reply() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -683,7 +717,7 @@ async fn the_read_loop_collects_a_response_that_did_not_fit_one_reply() {
 #[tokio::test]
 async fn a_response_that_never_ends_fails_rather_than_truncating() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -738,7 +772,7 @@ async fn a_response_that_never_ends_fails_rather_than_truncating() {
 #[tokio::test]
 async fn netr_share_enum_pages_until_a_reply_comes_back_successful() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -807,7 +841,7 @@ async fn netr_share_enum_pages_until_a_reply_comes_back_successful() {
 #[tokio::test]
 async fn a_page_that_adds_nothing_fails_rather_than_looping() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -852,7 +886,7 @@ async fn a_page_that_adds_nothing_fails_rather_than_looping() {
 #[tokio::test]
 async fn a_server_that_pages_forever_is_stopped_rather_than_followed() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
@@ -905,7 +939,7 @@ async fn a_server_that_pages_forever_is_stopped_rather_than_followed() {
 #[tokio::test]
 async fn both_paths_failing_says_why_each_did() {
     let (ipc, mut peer) = pair();
-    let enumeration = tokio::spawn(async move { ipc.list_shares(SERVER).await });
+    let enumeration = tokio::spawn(async move { ipc.list_shares(&server()).await });
 
     let rap = peer.request(TRANSACTION).await;
     peer.send(&refusal(&rap, NtStatus::NOT_SUPPORTED)).await;
