@@ -1,0 +1,3 @@
+=== ReadFile(subdir/large-read.bin) === 300032 bytes
+=== WriteFile(subdir/large-write.bin) === 300032 bytes
+=== Stat(subdir/large-write.bin) === size=300032
