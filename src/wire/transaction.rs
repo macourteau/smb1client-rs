@@ -94,6 +94,10 @@ struct ResponseWords {
 /// The transaction name the RAP path addresses.
 pub const PIPE_LANMAN: &str = "\\PIPE\\LANMAN";
 
+/// The transaction name [MS-CIFS] requires on `TRANS_TRANSACT_NMPIPE`. The
+/// pipe itself is named by the file id in the setup words.
+pub const PIPE_TRANSACT_NAME: &str = "\\PIPE\\";
+
 /// The `SMB_COM_TRANSACTION` subcommand that carries a DCE/RPC exchange on an
 /// open pipe.
 pub const TRANS_TRANSACT_NMPIPE: u16 = 0x0026;
@@ -235,7 +239,16 @@ impl TransactionRequest {
     }
 
     /// A `TRANS_TRANSACT_NMPIPE` on an open pipe: one request written and one
-    /// response returned, without a name.
+    /// response returned, the pipe named by the file id in its setup words.
+    ///
+    /// **The `Name` is `\\PIPE\\`**, which is what [MS-CIFS] requires on this
+    /// subcommand, spelled UTF-16LE like every other name this crate sends. The
+    /// reference library sends the request with no name at all — the byte area
+    /// of `capture-trans/0017-c2s-cmd25.bin` begins `05 00 0b 03`, the DCE/RPC
+    /// bind PDU, with nothing in front of it — and that is recorded as
+    /// known-wrong. It is invisible in practice only because the container
+    /// refuses that client's transactions earlier, over the RAP name it
+    /// mis-spells the same way.
     ///
     /// The reference asks for no parameter bytes back at all here. This crate
     /// asks for [`MIN_MAX_PARAMETER_COUNT`], which against the ceiling costs
@@ -249,7 +262,7 @@ impl TransactionRequest {
             flags: 0,
             timeout: 0,
             setup: vec![TRANS_TRANSACT_NMPIPE, fid],
-            name: None,
+            name: Some(TransactionName::unicode(PIPE_TRANSACT_NAME)),
             parameters: Vec::new(),
             data,
         }
@@ -686,18 +699,41 @@ mod tests {
     }
 
     /// The named-pipe transact shape, pinned against
-    /// `capture-trans/0017-c2s-cmd25.bin`: no name, `ParameterOffset = 0`, and
-    /// the payload at 67 — the first byte of the byte area, on an odd offset.
+    /// `capture-win-nmpipe/0011-c2s-cmd25.bin`: `\PIPE\` in UTF-16 after one
+    /// pad byte, `ParameterOffset = 0`, and the payload at 82.
+    ///
+    /// **Not** `capture-trans/0017-c2s-cmd25.bin`, which is the reference
+    /// library's own frame and carries no name at all — the defect recorded
+    /// under Where the Go library is the oracle, and where it is not. That
+    /// corpus still re-encodes to its own bytes, because the codec reproduces
+    /// what a frame contains; it is simply not what this crate builds.
     #[test]
-    fn a_pipe_transact_declares_no_parameter_offset_and_pads_nothing() {
-        let request = TransactionRequest::pipe_transact(0xB0D0, vec![0xAA; 116]);
+    fn a_pipe_transact_names_the_pipe_and_declares_no_parameter_offset() {
+        let request = TransactionRequest::pipe_transact(0x4003, vec![0xAA; 116]);
         let encoded = request.encode_body().unwrap();
         let words: RequestWords = read_words(&encoded[1..1 + 28]).unwrap();
+        // Two setup words put the byte area on 67, which is odd, so one pad
+        // byte lands the name on 68; fourteen bytes of UTF-16 with its
+        // terminator end on 82, where the payload starts unaligned.
         assert_eq!(words.setup_count, 2);
         assert_eq!(words.parameter_offset, 0);
         assert_eq!(words.parameter_count, 0);
-        assert_eq!(words.data_offset, 67);
+        assert_eq!(words.data_offset, 82);
         assert_eq!(words.data_count, 116);
-        assert_eq!(encoded[1 + 32..1 + 32 + 2], 116u16.to_le_bytes());
+        assert_eq!(encoded[1 + 32..1 + 32 + 2], (1u16 + 14 + 116).to_le_bytes());
+
+        // The arithmetic above is the crate's; these are the bytes a live
+        // Windows server answered `STATUS_SUCCESS`.
+        let (_, captured) = crate::wire::fixtures::frame("capture-win-nmpipe/0011-c2s-cmd25.bin");
+        let their_words: RequestWords = read_words(&captured[33..33 + 32]).unwrap();
+        assert_eq!(words.setup_count, their_words.setup_count);
+        assert_eq!(words.parameter_offset, their_words.parameter_offset);
+        assert_eq!(words.data_offset, their_words.data_offset);
+        assert_eq!(
+            TransactionRequest::decode(&Message::parse(captured).unwrap())
+                .unwrap()
+                .name,
+            request.name
+        );
     }
 }

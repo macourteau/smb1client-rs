@@ -144,6 +144,26 @@ pub enum Error {
     #[error("the server logged the client on as a guest rather than as the named user")]
     GuestLogon,
 
+    /// Two ways of performing one operation were both tried and both failed,
+    /// and this carries why each did.
+    ///
+    /// Share enumeration reaches it twice over: RAP giving way to DCE/RPC
+    /// `srvsvc`, and inside `srvsvc` a pipe transact giving way to
+    /// write-then-read. Both fall-throughs trigger on *any* error from the
+    /// first attempt, so the second attempt's own failure often says nothing
+    /// about why the first was abandoned — which is why the first is kept
+    /// rather than discarded. [`Error::kind`] and [`Error::status`] answer for
+    /// the second attempt, that being the one that decided the outcome.
+    #[error("{operation} failed both ways it was attempted: {first}; and then: {second}")]
+    BothAttemptsFailed {
+        /// What was being attempted, named for a reader of the message.
+        operation: &'static str,
+        /// Why the first way failed.
+        first: Box<Error>,
+        /// Why the second way failed.
+        second: Box<Error>,
+    },
+
     /// The server is one this crate declines to talk to, and the message says
     /// which requirement it failed.
     ///
@@ -183,6 +203,9 @@ impl Error {
             Error::Protocol(_) => io::ErrorKind::InvalidData,
             Error::GuestLogon => io::ErrorKind::PermissionDenied,
             Error::SigningRequired | Error::UnsupportedServer(_) => io::ErrorKind::Unsupported,
+            // The second attempt is the one that decided the outcome, so it is
+            // the one a caller acts on.
+            Error::BothAttemptsFailed { second, .. } => second.kind(),
         }
     }
 
@@ -199,6 +222,7 @@ impl Error {
             Error::TransactionRefused => Some(NtStatus::INSUFF_SERVER_RESOURCES),
             Error::TreeDisconnected => Some(NtStatus::NETWORK_NAME_DELETED),
             Error::ConnectionLost { status } => *status,
+            Error::BothAttemptsFailed { second, .. } => second.status(),
             Error::TransactionTooLarge { .. }
             | Error::ConnectTimeout
             | Error::RequestTimeout

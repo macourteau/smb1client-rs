@@ -109,3 +109,58 @@ are stated against, and each is proven here rather than assumed.
 held at once, essentially all of them Lapsed, which the retirement budget fails
 the connection long before. The check is enforced in `RequestTable::allocate`
 and is unreachable from a test that does not first defeat the budget.
+
+---
+
+## Share enumeration — what the corpus pins, and what it cannot
+
+Not an invariant, but the same distinction is worth recording here, because
+`rpc/` is the one module with no oracle: smb-rs's `smb-rpc` is NDR64-only, the
+reference library's own decoder is wrong in four of the ways the design record
+lists, and the fixtures are what stands behind everything the container's RAP
+answer hides.
+
+**Pinned by captured bytes**, in the unit tests beside the code:
+
+| Behaviour | Test | Corpus |
+|---|---|---|
+| The DCE/RPC bind, byte for byte | `rpc::pdu::tests::the_bind_matches_every_captured_one` | `capture-nmpipe`, `capture-win-nmpipe`, `capture-win-rap`, `capture-trans`, `srvsvc-synthesised` |
+| The `NetrShareEnum` request PDU and its stub, byte for byte | `rpc::pdu::tests::the_request_pdu_matches_every_captured_one`, `rpc::srvsvc::tests::the_request_stub_matches_every_captured_one` | the same, three corpora each |
+| Four shares with their kinds and comments, from Windows | `rpc::srvsvc::tests::windows_four_shares_decode_with_their_kinds_and_comments` | `capture-win-rap/0020`, `capture-win-nmpipe/0014` |
+| The same call answered over both transports by the container | `rpc::srvsvc::tests::the_container_answers_the_same_call_over_both_transports` | `capture-nmpipe/0014`, `capture-trans/0028` |
+| A third server's shape of the write/read exchange | `rpc::srvsvc::tests::the_synthesised_fixture_decodes_to_its_three_shares` | `srvsvc-synthesised` |
+| Every `bind_ack` accepted | `rpc::pdu::tests::every_captured_bind_ack_is_accepted` | four corpora |
+| The RAP reply, converter arithmetic included | `rpc::rap::tests::the_answered_rap_reply_decodes_to_its_two_shares` | `capture-rap/0010` |
+| The RAP request shape | `rpc::rap::tests::the_request_matches_the_captured_one_but_for_its_receive_buffer` | `capture-win-rap/0009` |
+| `\PIPE\` on `TRANS_TRANSACT_NMPIPE` | `wire::transaction::tests::a_pipe_transact_names_the_pipe_and_declares_no_parameter_offset` | `capture-win-nmpipe/0011` |
+
+**Constructed, because the corpus cannot hold it.** Every committed `srvsvc`
+response is a *single* PDU carrying `PFC_FIRST|PFC_LAST`, and every one is a
+*complete* enumeration — `TotalEntries` equal to `EntriesRead`, the resume
+handle back at zero and the return value `WERR_OK`. So the multi-PDU assembly
+loop and the `NetrShareEnum` paging loop have no fixture and can get none. They
+are the parts a server with many shares reaches first, and where a port without
+them truncates silently, so each is covered by a hand-built stream in
+`tests/rpc.rs` and in `rpc::pdu`'s own tests.
+
+Each of those tests was checked by mutation — the wrong implementation written
+into the source, the suite run, the source restored:
+
+| Mutation | Tests that fail |
+|---|---|
+| The assembler ignores `PFC_LAST_FRAG` (parses the first PDU) | six in `rpc::pdu::tests`, `only_the_assembled_stub_is_parsed_and_never_one_pdu` among them |
+| The paging loop returns the first page | `netr_share_enum_pages_until_a_reply_comes_back_successful` and two others |
+| The paging loop drops its no-progress guard | `a_page_that_adds_nothing_fails_rather_than_looping` |
+| `STATUS_BUFFER_OVERFLOW` read as an error | `the_read_loop_collects_a_response_that_did_not_fit_one_reply`, `a_response_that_never_ends_fails_rather_than_truncating` |
+| One pipe read and no loop, as the reference has it | eight of the eleven in `tests/rpc.rs` |
+| The RAP fall-through narrowed to `STATUS_NOT_SUPPORTED`, as the reference has it | `rap_more_data_falls_through_rather_than_enumerating_nothing`, `a_rap_reply_short_of_its_own_available_count_falls_through` |
+| The transact fall-through narrowed the same way | `both_paths_failing_says_why_each_did` |
+| A `bind_ack` on NDR64 accepted | `a_bind_ack_on_another_transfer_syntax_is_refused` |
+| A reply returning more shares than it says it holds accepted | `a_total_below_the_entries_returned_is_refused` |
+
+**The live coverage is the reverse of what the corpus suggests.** The captures
+were taken by a client the container refuses, so every one of them exercises the
+write/read fallback. A correct client inverts it: the container answers RAP, so
+share enumeration stops there and neither DCE/RPC transport runs at all.
+Everything below `Ipc::list_shares`'s first attempt is unreached in CI, which is
+what makes the fixtures above load-bearing rather than supplementary.
