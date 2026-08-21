@@ -120,10 +120,16 @@ jobs:
     if: always()
     steps:
       - name: Fail unless every job succeeded or was deliberately skipped
+        # The results arrive through the environment rather than interpolated
+        # into the script. GitHub Actions expressions accept single-quoted
+        # strings only, so a double-quoted separator is a workflow-level syntax
+        # error that rejects the whole file before any job starts — and passing
+        # it through `env` sidesteps the nested-quoting problem entirely.
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          results='${{ join(needs.*.result, " ") }}'
-          echo "Results: $results"
-          for r in $results; do
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do
             case "$r" in
               success|skipped) ;;
               *) echo "A required job reported '$r'" >&2; exit 1 ;;
