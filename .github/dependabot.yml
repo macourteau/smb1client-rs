@@ -49,3 +49,17 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: ci
+    ignore:
+      # dtolnay/rust-toolchain's version-shaped refs are *Rust* versions, not
+      # action versions: `@1.98` is a branch that installs Rust 1.98.0. So a
+      # Dependabot bump here does not update an action, it changes the compiler
+      # CI builds with — and it will happily propose a Rust that does not exist,
+      # which is what it did on its first run, offering 1.100 while stable was
+      # 1.98. The required check caught it; the point of this rule is that it
+      # should never have been proposed.
+      #
+      # Moving the pin is a deliberate decision, and the weekly `Specification
+      # drift` workflow is what signals when it is worth making: it runs clippy
+      # on current stable without gating anything, so a new lint arrives as a
+      # note rather than as a blocked merge.
+      - dependency-name: dtolnay/rust-toolchain
