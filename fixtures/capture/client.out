@@ -1,0 +1,7 @@
+=== ReadDir(root) ===
+  alpha.txt                size=11     dir=false mode=-rw-r--r-- mod=2026-08-20T11:40:14Z
+  gamma-longer-name.dat    size=37     dir=false mode=-rw-r--r-- mod=2026-08-20T11:40:14Z
+  subdir                   size=0      dir=true  mode=drwxr-xr-x mod=2026-08-20T11:40:14Z
+  beta.bin                 size=1024   dir=false mode=-rw-r--r-- mod=2026-08-20T11:40:14Z
+=== Stat(alpha.txt) === size=11 dir=false
+=== ReadFile(alpha.txt) === "hello world" (11 bytes)

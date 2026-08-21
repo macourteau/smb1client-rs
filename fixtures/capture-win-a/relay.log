@@ -1,0 +1,13 @@
+2026/08/20 09:30:01 relaying 127.0.0.1:10451 -> <windows-vm>:445, frames to spikes/capture-win-a/
+2026/08/20 09:30:03 c2s frame 1: nbtype=0x00 len=73 cmd=0x72
+2026/08/20 09:30:03 s2c frame 2: nbtype=0x00 len=127 cmd=0x72
+2026/08/20 09:30:03 c2s frame 3: nbtype=0x00 len=165 cmd=0x73
+2026/08/20 09:30:03 s2c frame 4: nbtype=0x00 len=422 cmd=0x73
+2026/08/20 09:30:03 c2s frame 5: nbtype=0x00 len=527 cmd=0x73
+2026/08/20 09:30:03 s2c frame 6: nbtype=0x00 len=180 cmd=0x73
+2026/08/20 09:30:03 c2s frame 7: nbtype=0x00 len=94 cmd=0x75
+2026/08/20 09:30:03 s2c frame 8: nbtype=0x00 len=35 cmd=0x75
+2026/08/20 09:30:03 c2s frame 9: nbtype=0x00 len=91 cmd=0x75
+2026/08/20 09:30:03 s2c frame 10: nbtype=0x00 len=54 cmd=0x75
+2026/08/20 09:30:03 c2s frame 11: nbtype=0x00 len=84 cmd=0x32
+2026/08/20 09:30:03 s2c frame 12: nbtype=0x00 len=35 cmd=0x32
