@@ -233,7 +233,7 @@ fn every_committed_frame_round_trips_through_its_codec() {
     let frames = every_frame();
     // Named so that a corpus that quietly loses frames fails here rather than
     // passing with less to prove.
-    assert_eq!(frames.len(), 218, "the corpus changed size");
+    assert_eq!(frames.len(), 228, "the corpus changed size");
 
     let mut bodyless = Vec::new();
     for relative in frames {
@@ -503,7 +503,9 @@ fn a_trans2_request_puts_its_parameter_block_on_sixty_six() {
 /// the same way.
 #[test]
 fn a_named_transaction_and_a_pipe_transact_differ_in_the_byte_area() {
-    use super::transaction::{PIPE_LANMAN, TRANS_TRANSACT_NMPIPE, TransactionRequest};
+    use super::transaction::{
+        NameEncoding, PIPE_LANMAN, TRANS_TRANSACT_NMPIPE, TransactionRequest,
+    };
 
     let rap = parse("capture-trans/0009-c2s-cmd25.bin");
     assert_eq!(rap.word_count(), 16);
@@ -511,7 +513,10 @@ fn a_named_transaction_and_a_pipe_transact_differ_in_the_byte_area() {
     assert_eq!(rap.byte_count(), 33);
     let rap = TransactionRequest::decode(&rap).unwrap();
     assert_eq!(rap.command, command::TRANSACTION);
-    assert_eq!(rap.name.as_deref(), Some(PIPE_LANMAN));
+    let name = rap.name.clone().expect("the RAP path names its pipe");
+    assert_eq!(name.text, PIPE_LANMAN);
+    // The reference's spelling, and the reason this frame was refused.
+    assert_eq!(name.encoding, NameEncoding::Ascii);
     assert_eq!(rap.setup, [0, 0]);
     assert_eq!(rap.max_parameter_count, 1024);
     assert_eq!(rap.parameters.len(), 19);
@@ -778,6 +783,74 @@ fn the_corpus_carries_both_ways_a_large_listing_arrives() {
         overshooting.check_limits(65_535),
         Err(WireError::FieldTooLong { length: 66_559, .. })
     ));
+}
+
+/// The same RAP request spelled the way the specification requires, and
+/// answered.
+///
+/// `SMB_COM_TRANSACTION`'s `Name` is a fourth name-alignment site and the one
+/// the reference library gets wrong: it sets `SMB_FLAGS2_UNICODE` and then
+/// writes 8-bit ASCII at an odd offset, and Samba — reading those bytes as the
+/// UTF-16 they claim to be — refuses the frame. Both spellings are in the
+/// corpus, carrying the same name and the same 19 parameter bytes, and the only
+/// difference between them is how the name is written and where every offset
+/// after it therefore lands.
+#[test]
+fn the_two_spellings_of_a_transaction_name_differ_only_in_the_name() {
+    use super::transaction::{NameEncoding, PIPE_LANMAN, TransactionRequest, TransactionResponse};
+    use crate::status::NtStatus;
+
+    let refused = TransactionRequest::decode(&parse("capture-trans/0009-c2s-cmd25.bin")).unwrap();
+    let answered = TransactionRequest::decode(&parse("capture-rap/0009-c2s-cmd25.bin")).unwrap();
+
+    let refused_name = refused.name.clone().unwrap();
+    let answered_name = answered.name.clone().unwrap();
+    assert_eq!(refused_name.text, PIPE_LANMAN);
+    assert_eq!(answered_name.text, PIPE_LANMAN);
+    assert_eq!(refused_name.encoding, NameEncoding::Ascii);
+    assert_eq!(answered_name.encoding, NameEncoding::Unicode);
+    assert_eq!(refused.parameters, answered.parameters);
+    assert_eq!(refused.setup, answered.setup);
+
+    // The ASCII name sits at 67 unaligned and takes 13 bytes; the UTF-16 one is
+    // padded onto 68 and takes 26, which moves both offsets by 14.
+    let frame_refused = parse("capture-trans/0009-c2s-cmd25.bin");
+    let frame_answered = parse("capture-rap/0009-c2s-cmd25.bin");
+    assert_eq!(frame_refused.byte_area_offset(), 67);
+    assert_eq!(frame_answered.byte_area_offset(), 67);
+    assert_eq!(frame_refused.byte_count(), 33);
+    assert_eq!(frame_answered.byte_count(), 47);
+    assert_eq!(frame_answered.byte_area()[0], 0, "the pad before the name");
+    assert_eq!(&frame_answered.byte_area()[1..3], [0x5C, 0x00]);
+    let words = frame_answered.words();
+    assert_eq!(u16::from_le_bytes([words[20], words[21]]), 94);
+    assert_eq!(u16::from_le_bytes([words[24], words[25]]), 114);
+
+    // Both carry the flag whose meaning the reference contradicts.
+    assert_eq!(frame_refused.header().flags2, 0xC803);
+    assert_eq!(frame_answered.header().flags2, 0xC803);
+
+    // What this crate builds is the answered spelling, and it reproduces that
+    // frame's own offsets.
+    let built = TransactionRequest::rap(answered.parameters.clone(), Vec::new());
+    assert_eq!(built.name.unwrap().encoding, NameEncoding::Unicode);
+
+    // The refusal, and the reply the corrected request earned. The corpus held
+    // no successful `SMB_COM_TRANSACTION` reply before this one.
+    assert_eq!(
+        parse("capture-trans/0010-s2c-cmd25.bin").header().status,
+        NtStatus::NOT_SUPPORTED
+    );
+    let reply = parse("capture-rap/0010-s2c-cmd25.bin");
+    assert_eq!(reply.header().status, NtStatus::SUCCESS);
+    assert_eq!(reply.word_count(), 10);
+    let reply = TransactionResponse::decode(&reply).unwrap();
+    assert_eq!(reply.total_parameter_count, 8);
+    assert_eq!(reply.total_data_count, 68);
+    assert_eq!(reply.parameter_offset, 56);
+    assert_eq!(reply.data_offset, 64);
+    // RAP status `NERR_Success`, converter 0, 2 entries returned of 2 available.
+    assert_eq!(reply.parameters, [0, 0, 0, 0, 2, 0, 2, 0]);
 }
 
 /// The fallback the embedded device forces, captured against a container that

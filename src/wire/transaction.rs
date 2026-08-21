@@ -98,6 +98,49 @@ pub const PIPE_LANMAN: &str = "\\PIPE\\LANMAN";
 /// open pipe.
 pub const TRANS_TRANSACT_NMPIPE: u16 = 0x0026;
 
+/// How an `SMB_COM_TRANSACTION` spells its `Name`.
+///
+/// This is a fourth name-alignment site, and it is the one the reference
+/// library gets wrong. Under `SMB_FLAGS2_UNICODE` the specification requires
+/// the name to be UTF-16 and to begin on a two-byte boundary from the start of
+/// the SMB header; the reference sets that flag and writes 8-bit ASCII at an
+/// odd offset anyway, and Samba refuses the frame — reading the bytes as the
+/// UTF-16 they claim to be and finding no pipe of that name.
+///
+/// The spelling is carried rather than chosen because both are in the corpus
+/// and each has to re-encode to its own bytes. Nothing infers it from `Flags2`:
+/// the reference sets that bit and writes ASCII regardless, which is the whole
+/// defect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameEncoding {
+    /// UTF-16LE, preceded by whatever padding lands it on a two-byte boundary.
+    /// This is what the specification requires under `SMB_FLAGS2_UNICODE`, what
+    /// a server accepts, and what this crate sends.
+    Unicode,
+    /// 8-bit ASCII, unaligned. The reference library's spelling, reproduced
+    /// here only so that a captured frame re-encodes to its own bytes.
+    Ascii,
+}
+
+/// The `Name` of an `SMB_COM_TRANSACTION`, and how it is spelled on the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionName {
+    /// The name itself, without its terminator.
+    pub text: String,
+    /// How it is written.
+    pub encoding: NameEncoding,
+}
+
+impl TransactionName {
+    /// A name spelled the way a conforming server requires.
+    pub fn unicode(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            encoding: NameEncoding::Unicode,
+        }
+    }
+}
+
 /// A TRANS2 or `SMB_COM_TRANSACTION` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionRequest {
@@ -123,8 +166,9 @@ pub struct TransactionRequest {
     /// The setup words. TRANS2 carries one, its subcommand; the RAP and
     /// named-pipe paths carry the transaction's own.
     pub setup: Vec<u16>,
-    /// The transaction name, on `SMB_COM_TRANSACTION` only.
-    pub name: Option<String>,
+    /// The transaction name, on `SMB_COM_TRANSACTION` only, and how it is
+    /// spelled.
+    pub name: Option<TransactionName>,
     /// The parameter block.
     pub parameters: Vec<u8>,
     /// The data block.
@@ -150,15 +194,16 @@ impl TransactionRequest {
 
     /// A RAP request on `\\PIPE\\LANMAN`, whose byte area opens with that name.
     ///
-    /// The name is written as unaligned ASCII, which is what the reference
-    /// sends and what `capture-trans/0009-c2s-cmd25.bin` carries. It is worth
-    /// knowing that this disagrees with the specification and with an
-    /// independent dissector: under `SMB_FLAGS2_UNICODE` the transaction name
-    /// is a UTF-16 string beginning on a two-byte boundary, tshark reads these
-    /// bytes as one, and the name in that frame begins at 67. No server in the
-    /// evidence base has accepted a RAP request — the container answered that
-    /// one `STATUS_NOT_SUPPORTED` — so whether the encoding is what the refusal
-    /// is about is not settled here.
+    /// The name goes out as UTF-16LE on a two-byte boundary, which is what the
+    /// specification requires of a client setting `SMB_FLAGS2_UNICODE` and what
+    /// a server answers. It is **not** what the reference library sends: it
+    /// writes 8-bit ASCII at an odd offset with that flag set, and Samba
+    /// refuses the frame `STATUS_NOT_SUPPORTED`, having read the bytes as the
+    /// UTF-16 they claim to be. `capture-trans/0009-c2s-cmd25.bin` is the
+    /// refusal and `capture-rap/0009-c2s-cmd25.bin` is the same request spelled
+    /// correctly and answered, two shares returned. The defect is reproduced by
+    /// the codec so that the first of those re-encodes to its own bytes, and it
+    /// is not inherited by anything this crate builds.
     pub fn rap(parameters: Vec<u8>, data: Vec<u8>) -> Self {
         Self {
             command: command::TRANSACTION,
@@ -168,7 +213,7 @@ impl TransactionRequest {
             flags: 0,
             timeout: 0,
             setup: vec![0, 0],
-            name: Some(PIPE_LANMAN.to_owned()),
+            name: Some(TransactionName::unicode(PIPE_LANMAN)),
             parameters,
             data,
         }
@@ -236,8 +281,17 @@ impl TransactionRequest {
 
         let mut area = offsets::ByteArea::for_word_count(word_count);
         if let Some(name) = &self.name {
-            area.put(name.as_bytes());
-            area.put(&[0]);
+            match name.encoding {
+                NameEncoding::Unicode => {
+                    area.align_to(offsets::NAME_ALIGNMENT);
+                    offsets::require_word_aligned("Name", area.offset())?;
+                    area.put(&super::utf16z(&name.text));
+                }
+                NameEncoding::Ascii => {
+                    area.put(name.text.as_bytes());
+                    area.put(&[0]);
+                }
+            }
         }
         // An empty parameter block declares offset 0 and takes no space, and an
         // empty data block declares where it would have gone. The asymmetry is
@@ -317,8 +371,7 @@ impl TransactionRequest {
                     declared: end,
                     length: area.len(),
                 })?;
-                let end = raw.iter().position(|&byte| byte == 0).unwrap_or(raw.len());
-                Some(String::from_utf8_lossy(&raw[..end]).into_owned())
+                Some(decode_name(message.byte_area_offset(), raw)?)
             } else {
                 None
             }
@@ -477,6 +530,43 @@ impl TransactionResponse {
     }
 }
 
+/// Reads an `SMB_COM_TRANSACTION` `Name` and works out how it was spelled.
+///
+/// The spelling comes from the bytes and never from the header's `Flags2`: the
+/// reference library sets `SMB_FLAGS2_UNICODE` and writes ASCII anyway, so the
+/// flag says nothing about what follows. `region` is the byte area up to
+/// whichever block lands first, which is exactly the space the name occupies.
+///
+/// A UTF-16 name is padded to a two-byte boundary, has an even number of bytes
+/// after that pad, and ends in a null unit with no earlier one. An ASCII name
+/// satisfies none of that except by coincidence — the reference's
+/// `\PIPE\LANMAN` leaves 12 bytes after the pad ending `4e 00`, not `00 00`.
+fn decode_name(byte_area_offset: usize, region: &[u8]) -> Result<TransactionName, WireError> {
+    let pad = usize::from(!byte_area_offset.is_multiple_of(offsets::NAME_ALIGNMENT));
+    if let Some(units) = region.get(pad..)
+        && units.len() >= 2
+        && units.len().is_multiple_of(2)
+        && units.ends_with(&[0, 0])
+        && !units[..units.len() - 2]
+            .chunks_exact(2)
+            .any(|unit| unit == [0, 0])
+    {
+        return Ok(TransactionName {
+            text: super::from_utf16("Name", 0, &units[..units.len() - 2])?,
+            encoding: NameEncoding::Unicode,
+        });
+    }
+
+    let end = region
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(region.len());
+    Ok(TransactionName {
+        text: String::from_utf8_lossy(&region[..end]).into_owned(),
+        encoding: NameEncoding::Ascii,
+    })
+}
+
 /// Reads the setup words that follow a transaction's fixed word block.
 fn setup_words(message: &Message, fixed: u8, declared: u8) -> Result<Vec<u16>, WireError> {
     let start = usize::from(fixed) * 2;
@@ -536,9 +626,10 @@ mod tests {
     /// `SMB_COM_TRANSACTION` has no committed fixture, so what is asserted is
     /// the helper's own arithmetic: the name goes in first, and both offsets
     /// follow from where it left the cursor.
-    /// The RAP shape, pinned against `capture-trans/0009-c2s-cmd25.bin`: two
-    /// setup words, a 13-byte name at 67, the parameter block at 80, and a
-    /// `DataOffset` of 100 one pad byte past the end of it with no data there.
+    /// The RAP shape this crate sends, pinned against
+    /// `capture-rap/0009-c2s-cmd25.bin`: two setup words, a UTF-16 name padded
+    /// onto 68, the parameter block at 94, and a `DataOffset` of 114 one pad
+    /// byte past the end of it with no data there.
     #[test]
     fn a_named_transaction_places_its_blocks_after_the_name() {
         let request = TransactionRequest::rap(
@@ -549,11 +640,17 @@ mod tests {
         let encoded = request.encode_body().unwrap();
         let words: RequestWords = read_words(&encoded[1..1 + 28]).unwrap();
         assert_eq!(words.setup_count, 2);
-        assert_eq!(words.parameter_offset, 80);
+        // One pad byte lands the name on 68, 26 bytes of UTF-16 with its
+        // terminator end on 94, and the 19-byte parameter block ends odd, so
+        // one more pad puts `DataOffset` on 114 with no data there.
+        assert_eq!(words.parameter_offset, 94);
         assert_eq!(words.parameter_count, 19);
-        assert_eq!(words.data_offset, 100);
+        assert_eq!(words.data_offset, 114);
         assert_eq!(words.data_count, 0);
-        assert_eq!(encoded[1 + 32..1 + 32 + 2], (13u16 + 19 + 1).to_le_bytes());
+        assert_eq!(
+            encoded[1 + 32..1 + 32 + 2],
+            (1u16 + 26 + 19 + 1).to_le_bytes()
+        );
     }
 
     /// The named-pipe transact shape, pinned against
