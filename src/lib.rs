@@ -51,4 +51,15 @@
 // a status can be written until it exists.
 pub mod status;
 
+// The wire layer is the crate's codec and is deliberately not public surface:
+// callers reach a file through `Client`, `Tree` and `File`, and every message
+// type here is an implementation detail of that path.
+//
+// Its consumer is the connection actor, which is the next piece of the build
+// order; until that exists the whole layer is unreachable from the crate root
+// and every item in it reads as dead. The allow comes off with the actor, and
+// the fixture suite is what holds the layer to account in the meantime.
+#[allow(dead_code)]
+mod wire;
+
 pub use status::NtStatus;
