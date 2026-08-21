@@ -23,16 +23,41 @@
 //! challenge. So the decoders here branch on the `WordCount` the frame actually
 //! carries and leave the status to the layer that classifies statuses.
 
+// The connection actor is command-agnostic: it frames, routes and reassembles,
+// and the body it carries is opaque to it. So what it brings into use is the
+// header, the NetBIOS framing and the transaction response — and the encoders
+// and per-command decoders below stay unreachable until the layer that issues
+// each command exists. The allow is per module rather than over the whole
+// layer, so it shrinks as each build step lands rather than hiding what the
+// step after it leaves behind.
 pub mod andx;
+/// `NT_CREATE_ANDX`, `SMB_COM_CLOSE` and `SMB_COM_RENAME`, issued by `tree.rs`
+/// and `resource/`.
+#[allow(dead_code)]
 pub mod file;
+/// `TRANS2_FIND_FIRST2` and `TRANS2_FIND_NEXT2`, issued by the listing
+/// iterator.
+#[allow(dead_code)]
 pub mod find;
 pub mod header;
+/// `READ_ANDX` and `WRITE_ANDX`, issued by `resource/`.
+#[allow(dead_code)]
 pub mod io;
+/// `SMB_COM_NEGOTIATE`, issued by the handshake.
+#[allow(dead_code)]
 pub mod negotiate;
 pub mod netbios;
 pub mod offsets;
+/// `SESSION_SETUP_ANDX` and `LOGOFF_ANDX`, issued by the handshake and the
+/// teardown.
+#[allow(dead_code)]
 pub mod session;
+/// The response side is what the actor reassembles; the request side is built
+/// by the layers that issue transactions, at build steps 4 and 5.
+#[allow(dead_code)]
 pub mod transaction;
+/// `TREE_CONNECT_ANDX` and `SMB_COM_TREE_DISCONNECT`, issued by `tree.rs`.
+#[allow(dead_code)]
 pub mod tree;
 
 #[cfg(test)]
@@ -284,6 +309,9 @@ impl Message {
     }
 
     /// The byte area, bounded by the message rather than by `ByteCount`.
+    // Read by the per-command decoders, which arrive with the layers that issue
+    // those commands.
+    #[allow(dead_code)]
     pub fn byte_area(&self) -> &[u8] {
         &self.bytes[self.byte_area_offset()..]
     }

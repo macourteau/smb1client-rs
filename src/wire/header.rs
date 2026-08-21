@@ -73,9 +73,13 @@ pub const FLAGS_CLIENT: u8 = FLAGS_CASE_INSENSITIVE | FLAGS_CANONICALIZED_PATHS;
 pub const FLAGS2_KNOWS_LONG_NAMES: u16 = 0x0001;
 /// `SMB_FLAGS2_KNOWS_EAS`. Deliberately **not** sent: it claims the client
 /// understands extended attributes, and this crate implements none.
+// Named so that the bit the reference sets and this crate does not has somewhere
+// to be named. Nothing reads it but the fixture suite.
+#[allow(dead_code)]
 pub const FLAGS2_KNOWS_EAS: u16 = 0x0002;
 /// `SMB_FLAGS2_IS_LONG_NAME`. A different bit from [`FLAGS2_KNOWS_LONG_NAMES`],
 /// and not sent either.
+#[allow(dead_code)]
 pub const FLAGS2_IS_LONG_NAME: u16 = 0x0040;
 /// `SMB_FLAGS2_EXTENDED_SECURITY`. The request-side half of the
 /// `CAP_EXTENDED_SECURITY` floor: it is what says the `SESSION_SETUP_ANDX` this
@@ -110,7 +114,8 @@ pub mod command {
     pub const WRITE_ANDX: u8 = 0x2F;
     /// `SMB_COM_TRANSACTION2`.
     pub const TRANSACTION2: u8 = 0x32;
-    /// `SMB_COM_FIND_CLOSE2`.
+    /// `SMB_COM_FIND_CLOSE2`. Issued by a listing dropped before end-of-stream.
+    #[allow(dead_code)]
     pub const FIND_CLOSE2: u8 = 0x34;
     /// `SMB_COM_TREE_DISCONNECT`.
     pub const TREE_DISCONNECT: u8 = 0x71;
@@ -122,7 +127,8 @@ pub mod command {
     pub const LOGOFF_ANDX: u8 = 0x74;
     /// `SMB_COM_TREE_CONNECT_ANDX`.
     pub const TREE_CONNECT_ANDX: u8 = 0x75;
-    /// `SMB_COM_ECHO`.
+    /// `SMB_COM_ECHO`. Issued by the cache's liveness probe.
+    #[allow(dead_code)]
     pub const ECHO: u8 = 0x2B;
     /// `SMB_COM_NT_CREATE_ANDX`.
     pub const NT_CREATE_ANDX: u8 = 0xA2;

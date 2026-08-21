@@ -57,6 +57,9 @@ impl ByteArea {
     ///
     /// `ByteCount` is 16 bits and wraps. It is declared from this and is never
     /// read back as a length.
+    // Read where an encoder declares a `ByteCount` of its own; the layers that
+    // issue those commands arrive at build steps 3 and 4.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
@@ -77,6 +80,7 @@ impl ByteArea {
     }
 
     /// Pads to `align`, then appends a block, returning the offset it starts at.
+    #[allow(dead_code)]
     pub fn put_aligned(&mut self, align: usize, block: &[u8]) -> usize {
         self.align_to(align);
         self.put(block)
