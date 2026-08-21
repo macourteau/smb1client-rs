@@ -51,6 +51,14 @@
 // a status can be written until it exists.
 pub mod status;
 
+// The statuses [MS-CIFS] defines that [MS-ERREF] does not, hand-written beside
+// the generated table rather than inside it.
+pub mod cifs_status;
+
+// The error type, and the status classification, which the whole crate reaches
+// its failures through.
+pub mod error;
+
 // The wire layer is the crate's codec and is deliberately not public surface:
 // callers reach a file through `Client`, `Tree` and `File`, and every message
 // type here is an implementation detail of that path.
@@ -62,4 +70,5 @@ pub mod status;
 #[allow(dead_code)]
 mod wire;
 
+pub use error::{Error, Result};
 pub use status::NtStatus;
