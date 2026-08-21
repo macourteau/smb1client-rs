@@ -60,12 +60,21 @@ catches that class locally.
 resolves `cargo-clippy` from `PATH`, so a package-manager copy shadows rustup's
 even under `rustup run` — which means a stale clippy can report a clean tree
 that CI then rejects on lints it never knew about. `cargo clippy --version`
-should match the toolchain CI pins in `.github/workflows/ci.yml`; if it does
-not, put the toolchain's own bin directory first:
+should match the toolchain CI pins in `.github/workflows/ci.yml`. If it does
+not, put that toolchain's own directory in front, located through rustup:
 
 ```sh
-export PATH="$(rustc --print sysroot)/bin:$PATH"
+PATH="$(dirname "$(rustup which --toolchain stable cargo-clippy)"):$PATH" \
+  cargo clippy --all-targets -- -D warnings
 ```
+
+**Two shorter fixes do not work, and both look like they do.**
+`rustup run <toolchain> cargo clippy` still resolves `cargo-clippy` from `PATH`,
+so it runs the shadowing one under a correct `rustc`. And
+`export PATH="$(rustc --print sysroot)/bin:$PATH"` asks the *shadowing* `rustc`
+for its sysroot and therefore puts the stale toolchain first — it entrenches the
+problem while appearing to solve it. Always read `cargo clippy --version` back
+before believing a clean run.
 
 The MSRV leg. This is the only thing that checks the crate's own code compiles
 on the floor it declares — the 2024 edition's resolver is MSRV-aware for

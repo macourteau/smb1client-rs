@@ -388,8 +388,10 @@ async fn rap_answers_and_neither_dce_rpc_transport_runs() {
     // area, which is what a server answers and what the reference mis-spells.
     assert_eq!(request[32], 14, "a RAP request carries no setup words");
     let name: Vec<u16> = request[64..64 + 24]
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
         .collect();
     assert_eq!(String::from_utf16(&name).unwrap(), "\\PIPE\\LANMAN");
 
@@ -428,8 +430,10 @@ async fn srvsvc_over_transact(peer: &mut Peer, rounds: &[Vec<u8>]) {
     assert_eq!(u16::from_le_bytes([bind[61], bind[62]]), 0x0026);
     assert_eq!(u16::from_le_bytes([bind[63], bind[64]]), FID);
     let name: Vec<u16> = bind[68..68 + 12]
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
         .collect();
     assert_eq!(String::from_utf16(&name).unwrap(), "\\PIPE\\");
     peer.send(&transaction_reply(
