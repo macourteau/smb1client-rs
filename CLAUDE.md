@@ -46,7 +46,15 @@ cargo test --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 cargo package --locked
 cargo deny check
+actionlint
 ```
+
+`actionlint` is not optional tidiness. A YAML parser accepts a workflow whose
+**expressions** are invalid — GitHub Actions expressions allow single-quoted
+strings only, and a double-quoted one is a file-level syntax error. GitHub then
+rejects the whole workflow before any job starts, and the failure carries no
+job, no log and a zero duration, so there is nothing to read. `actionlint`
+catches that class locally.
 
 **Check which clippy answers before trusting a clean run.** `cargo clippy`
 resolves `cargo-clippy` from `PATH`, so a package-manager copy shadows rustup's
