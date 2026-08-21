@@ -305,9 +305,10 @@ impl Pipe {
             accept_pipe_status(reply.status())?;
             let data = ReadAndxResponse::decode(&parse(&reply)?)?.data;
             if data.is_empty() {
-                // The pipe has nothing more to give and no PDU has closed the
-                // answer, so what did arrive is a fragment of a reply and not a
-                // short one. `Collector::finish` names it.
+                // The no-progress guard. The pipe has nothing more to give and
+                // no PDU has closed the answer, so what arrived is a fragment
+                // of a reply rather than a short one: `Collector::finish` fails
+                // the call and names the flag that never came.
                 break;
             }
             self.offset += data.len() as u64;

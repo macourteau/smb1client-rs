@@ -256,7 +256,7 @@ impl Ipc {
                     call,
                 )
                 .await?;
-            let stub = pdu::Collector::response(&answer).map_err(protocol)?;
+            let stub = pdu::response(&answer).map_err(protocol)?;
             let page = srvsvc::response(stub).map_err(protocol)?;
 
             let added = page.shares.len();

@@ -521,17 +521,20 @@ impl Collector {
             _ => Err(PduError::NoLastFragment { pdus: self.pdus }),
         }
     }
+}
 
-    /// Holds a reply to the type the call expects.
-    pub fn response(answer: &Answer) -> Result<&[u8], PduError> {
-        if answer.ptype != ptype::RESPONSE {
-            return Err(PduError::UnexpectedType {
-                expected: ptype::RESPONSE,
-                actual: answer.ptype,
-            });
-        }
-        Ok(&answer.payload)
+/// The stub of an assembled reply, where the reply was one.
+///
+/// A `bind_ack` where a response was expected is not a stub to unmarshal, and
+/// reading its body as one is how a decoder produces confident nonsense.
+pub fn response(answer: &Answer) -> Result<&[u8], PduError> {
+    if answer.ptype != ptype::RESPONSE {
+        return Err(PduError::UnexpectedType {
+            expected: ptype::RESPONSE,
+            actual: answer.ptype,
+        });
     }
+    Ok(&answer.payload)
 }
 
 /// A fault PDU's status, which sits eight bytes into its body.
@@ -713,7 +716,7 @@ mod tests {
         assert!(srvsvc::response(&stub[..split]).is_err());
 
         let answer = collect(1, &[&first, &second]).unwrap();
-        let assembled = Collector::response(&answer).unwrap();
+        let assembled = response(&answer).unwrap();
         assert_eq!(assembled, &stub[..]);
         let page = srvsvc::response(assembled).unwrap();
         assert_eq!(page.shares.len(), 3);
@@ -745,9 +748,7 @@ mod tests {
         collector.feed(&second).unwrap();
         assert!(collector.complete());
         assert_eq!(
-            Collector::response(&collector.finish().unwrap())
-                .unwrap()
-                .len(),
+            response(&collector.finish().unwrap()).unwrap().len(),
             short.len() + whole.len() - short.len()
         );
     }
@@ -777,10 +778,7 @@ mod tests {
             collector.feed(&[*byte]).unwrap();
         }
         assert!(collector.complete());
-        assert_eq!(
-            Collector::response(&collector.finish().unwrap()).unwrap(),
-            &stub[..]
-        );
+        assert_eq!(response(&collector.finish().unwrap()).unwrap(), &stub[..]);
     }
 
     /// Two PDUs arriving in one read are both taken.
@@ -790,7 +788,7 @@ mod tests {
         let mut stream = response_fragment(1, PFC_FIRST_FRAG, &stub[..20]);
         stream.extend_from_slice(&response_fragment(1, PFC_LAST_FRAG, &stub[20..]));
         let answer = collect(1, &[&stream]).unwrap();
-        assert_eq!(Collector::response(&answer).unwrap(), &stub[..]);
+        assert_eq!(response(&answer).unwrap(), &stub[..]);
     }
 
     #[test]
