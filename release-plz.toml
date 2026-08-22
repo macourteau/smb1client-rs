@@ -10,6 +10,7 @@ git_tag_enable = true
 # is a minor bump and what protects a consumer from an unreviewed breaking
 # release is the resolver rather than review.
 allow_dirty = false
-# The registry step is withheld; `package.publish = false` in Cargo.toml is the
-# guard that does not depend on this file being read.
-publish = false
+# `package.publish` in Cargo.toml is the guard that does not depend on this file
+# being read; the workflow's RELEASE_ENABLED gate is the one that stops the
+# workflow running at all.
+publish = true
