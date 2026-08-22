@@ -85,10 +85,21 @@ pub mod auth;
 // ownership, which is what makes the negotiated parameters injectable.
 pub mod session;
 
+// The share-relative path policy, which every `Tree` verb's path goes through.
+mod path;
+
+// The tree connection and the filesystem verbs.
+pub mod tree;
+
+// Open handles: files, listings and the adapters.
+pub mod resource;
+
 pub use auth::{Credentials, Password};
 pub use error::{Error, Result};
+pub use resource::{DirEntry, File, FileReader, FileWriter, ReadDir, WriteProgress};
 pub use session::{Session, SessionOptions};
 pub use status::NtStatus;
+pub use tree::{FsInfoLevel, FsStatistics, Metadata, OpenOptions, Tree};
 
 /// The four parsers an unauthenticated peer can reach, as `&[u8] -> Result`
 /// wrappers for `fuzz/`.

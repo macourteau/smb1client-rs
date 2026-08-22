@@ -30,6 +30,11 @@
 // each command exists. The allow is per module rather than over the whole
 // layer, so it shrinks as each build step lands rather than hiding what the
 // step after it leaves behind.
+//
+// What remains dead once the filesystem verbs exist is the *decode* side of the
+// commands this crate only sends: it has one consumer, the fixture round-trip,
+// and that is `#[cfg(test)]`. Dropping it would cost the corpus sweep the
+// coverage it exists for.
 pub mod andx;
 /// `NT_CREATE_ANDX`, `SMB_COM_CLOSE` and `SMB_COM_RENAME`, issued by `tree.rs`
 /// and `resource/`.
@@ -40,6 +45,8 @@ pub mod file;
 #[allow(dead_code)]
 pub mod find;
 pub mod header;
+/// The TRANS2 information subcommands, issued by `tree.rs` and `resource/`.
+pub mod info;
 /// `READ_ANDX` and `WRITE_ANDX`, issued by `resource/`.
 #[allow(dead_code)]
 pub mod io;

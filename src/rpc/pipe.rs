@@ -38,7 +38,7 @@ use crate::wire::io::{ReadAndxRequest, ReadAndxResponse, WriteAndxRequest, Write
 use crate::wire::transaction::TransactionRequest;
 
 use super::pdu::{Answer, Collector};
-use super::{parse, protocol, refused, too_large, transport};
+use super::{protocol, too_large};
 
 /// What a message carries before its payload does.
 ///
@@ -122,12 +122,11 @@ impl Pipe {
                 uid,
                 request.encode_body()?,
             ))
-            .await
-            .map_err(transport)?;
+            .await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(refused(reply.status()));
+            return Err(Error::refused(reply.status()));
         }
-        let opened = NtCreateAndxResponse::decode(&parse(&reply)?)?;
+        let opened = NtCreateAndxResponse::decode(reply.parsed())?;
         debug!(fid = opened.fid, name, "named pipe opened");
         Ok(Self {
             connection,
@@ -221,8 +220,7 @@ impl Pipe {
                 transaction.max_parameter_count,
                 transaction.max_data_count,
             ))
-            .await
-            .map_err(transport)?;
+            .await?;
         // `STATUS_BUFFER_OVERFLOW` here is a *completed* transaction whose pipe
         // payload was truncated, delivered by the connection layer as the reply
         // it is. What it asks for is another pipe read, never more transaction
@@ -261,10 +259,9 @@ impl Pipe {
             let reply = self
                 .connection
                 .request(Request::new(command::WRITE_ANDX, self.tid, self.uid, body))
-                .await
-                .map_err(transport)?;
+                .await?;
             accept_pipe_status(reply.status())?;
-            let acknowledged = WriteAndxResponse::decode(&parse(&reply)?)?.count as usize;
+            let acknowledged = WriteAndxResponse::decode(reply.parsed())?.count as usize;
             if acknowledged == 0 {
                 return Err(Error::Protocol(Box::new(WireError::Truncated {
                     part: "the pipe write acknowledgement",
@@ -300,10 +297,9 @@ impl Pipe {
             let reply = self
                 .connection
                 .request(Request::new(command::READ_ANDX, self.tid, self.uid, body))
-                .await
-                .map_err(transport)?;
+                .await?;
             accept_pipe_status(reply.status())?;
-            let data = ReadAndxResponse::decode(&parse(&reply)?)?.data;
+            let data = ReadAndxResponse::decode(reply.parsed())?.data;
             if data.is_empty() {
                 // The no-progress guard. The pipe has nothing more to give and
                 // no PDU has closed the answer, so what arrived is a fragment
@@ -336,5 +332,5 @@ fn accept_pipe_status(status: NtStatus) -> Result<()> {
     if status == NtStatus::SUCCESS || status == NtStatus::BUFFER_OVERFLOW {
         return Ok(());
     }
-    Err(refused(status))
+    Err(Error::refused(status))
 }

@@ -105,8 +105,13 @@ pub enum ReassemblyError {
 ///
 /// Ranges are half-open, kept sorted, disjoint and merged, so a range that is
 /// completely covered is exactly one entry.
+///
+/// It is shared with the read fill loop, which tracks which ranges of the span
+/// a caller asked for have arrived and by the same rule: replies land out of
+/// order on a pipelining transport, so a running total cannot say which bytes
+/// are in hand.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct Coverage {
+pub(crate) struct Coverage {
     ranges: Vec<(usize, usize)>,
 }
 
@@ -115,7 +120,7 @@ impl Coverage {
     ///
     /// Returns `false` where any of those bytes was already covered, which is
     /// the overlap the caller reports as a protocol error.
-    fn cover(&mut self, start: usize, length: usize) -> bool {
+    pub(crate) fn cover(&mut self, start: usize, length: usize) -> bool {
         if length == 0 {
             return true;
         }
@@ -145,6 +150,33 @@ impl Coverage {
         self.ranges.retain(|&(from, _)| from < total);
         if let Some(last) = self.ranges.last_mut() {
             last.1 = last.1.min(total);
+        }
+    }
+
+    /// The first range of `0 .. total` that has not been covered, if any.
+    ///
+    /// A hole in the middle and a short far end are the same outcome to a
+    /// caller, and only the error's own text distinguishes them.
+    pub(crate) fn gap(&self, total: usize) -> Option<(usize, usize)> {
+        let mut at = 0;
+        for &(from, to) in &self.ranges {
+            if from > at {
+                return Some((at, from.min(total)));
+            }
+            at = to;
+            if at >= total {
+                return None;
+            }
+        }
+        (at < total).then_some((at, total))
+    }
+
+    /// The contiguous prefix from zero, which is the only part of a partial
+    /// transfer that is safe to resume from.
+    pub(crate) fn prefix(&self) -> usize {
+        match self.ranges.first() {
+            Some(&(0, end)) => end,
+            _ => 0,
         }
     }
 

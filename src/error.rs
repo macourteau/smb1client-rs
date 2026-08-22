@@ -164,6 +164,32 @@ pub enum Error {
         second: Box<Error>,
     },
 
+    /// A write failed part-way, and this is the contiguous acknowledged prefix
+    /// that reached the server.
+    ///
+    /// It is a lower bound and never the total that landed: if a middle chunk
+    /// fails while later ones succeed the two differ, and only the prefix is
+    /// safe to resume from. The call drains every chunk it issued to a terminal
+    /// outcome before returning this, so the number accounts for the whole call
+    /// rather than for whichever chunk answered first.
+    #[error("the write stopped after {written} bytes had been acknowledged: {source}")]
+    WritePartial {
+        /// The contiguous acknowledged prefix.
+        written: u64,
+        /// Why the write stopped.
+        source: Box<Error>,
+    },
+
+    /// A [`WriteProgress`](crate::WriteProgress) that already serves a write was
+    /// passed to a second one.
+    ///
+    /// One handle serves one write, for its whole lifetime and not merely one at
+    /// a time: a prefix computed across two writes to different offsets means
+    /// nothing, and a completion signal that waits for both answers neither. A
+    /// caller writing twice constructs two handles.
+    #[error("this WriteProgress already serves a write; construct one per write")]
+    ProgressInUse,
+
     /// The server is one this crate declines to talk to, and the message says
     /// which requirement it failed.
     ///
@@ -191,9 +217,12 @@ impl Error {
             // caller is left to act on the message rather than on a kind that
             // would invite a retry the crate deliberately does not perform.
             Error::TransactionRefused => io::ErrorKind::Other,
-            Error::TransactionTooLarge { .. } | Error::InvalidPath(_) => {
+            Error::TransactionTooLarge { .. } | Error::InvalidPath(_) | Error::ProgressInUse => {
                 io::ErrorKind::InvalidInput
             }
+            // The write's own failure is what a caller acts on; the prefix is
+            // the number beside it.
+            Error::WritePartial { source, .. } => source.kind(),
             Error::ConnectionLost { .. } => io::ErrorKind::ConnectionAborted,
             // The tree is gone and the connection is not, so the call needs a
             // tree re-opened rather than anything re-dialled.
@@ -206,6 +235,24 @@ impl Error {
             // The second attempt is the one that decided the outcome, so it is
             // the one a caller acts on.
             Error::BothAttemptsFailed { second, .. } => second.kind(),
+        }
+    }
+
+    /// What a status a server refused an operation with means here.
+    ///
+    /// Three statuses are more than the refusal they look like: two of them say
+    /// something the caller has to act on differently — the tree is gone, or the
+    /// session and with it the connection — and the third names a likely cause
+    /// the status text points away from. Everything else keeps its status and is
+    /// classified by [`Error::kind`].
+    pub(crate) fn refused(status: NtStatus) -> Self {
+        match status {
+            NtStatus::INSUFF_SERVER_RESOURCES => Error::TransactionRefused,
+            NtStatus::NETWORK_NAME_DELETED => Error::TreeDisconnected,
+            NtStatus::USER_SESSION_DELETED => Error::ConnectionLost {
+                status: Some(status),
+            },
+            other => Error::Status(other),
         }
     }
 
@@ -223,6 +270,7 @@ impl Error {
             Error::TreeDisconnected => Some(NtStatus::NETWORK_NAME_DELETED),
             Error::ConnectionLost { status } => *status,
             Error::BothAttemptsFailed { second, .. } => second.status(),
+            Error::WritePartial { source, .. } => source.status(),
             Error::TransactionTooLarge { .. }
             | Error::ConnectTimeout
             | Error::RequestTimeout
@@ -231,6 +279,7 @@ impl Error {
             | Error::InvalidPath(_)
             | Error::SigningRequired
             | Error::GuestLogon
+            | Error::ProgressInUse
             | Error::UnsupportedServer(_) => None,
         }
     }
@@ -251,6 +300,33 @@ impl From<Error> for io::Error {
 impl From<WireError> for Error {
     fn from(error: WireError) -> Self {
         Error::Protocol(Box::new(error))
+    }
+}
+
+/// What a connection failure means to a caller.
+///
+/// The connection layer's errors divide into two groups: three that fail one
+/// request and leave the connection working, and everything else, which means
+/// the connection is gone and the next call must re-dial. None of the second
+/// group carries a status.
+impl From<crate::connection::Error> for Error {
+    fn from(error: crate::connection::Error) -> Self {
+        use crate::connection::Error as Transport;
+        match error {
+            Transport::Io(inner) => Error::Io(inner),
+            Transport::Wire(inner) => Error::Protocol(Box::new(inner)),
+            Transport::Timeout => Error::RequestTimeout,
+            Transport::Reassembly(inner) => Error::Protocol(Box::new(inner)),
+            Transport::SessionDeleted => Error::ConnectionLost {
+                status: Some(NtStatus::USER_SESSION_DELETED),
+            },
+            Transport::Lost
+            | Transport::Unroutable { .. }
+            | Transport::ChainedResponse(_)
+            | Transport::Silent
+            | Transport::RetirementBudget(_)
+            | Transport::PoolExhausted => Error::ConnectionLost { status: None },
+        }
     }
 }
 

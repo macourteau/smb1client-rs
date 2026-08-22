@@ -43,9 +43,9 @@ use tracing::debug;
 use crate::connection::{Connection, Reply, Request};
 use crate::error::{Error, Result};
 use crate::status::NtStatus;
+use crate::wire::WireError;
 use crate::wire::header::command;
 use crate::wire::transaction::{self, TransactionRequest};
-use crate::wire::{Message, WireError};
 
 use pipe::Pipe;
 
@@ -219,7 +219,7 @@ impl Ipc {
             TransactionRequest::rap(rap::request(transaction::MAX_DATA_COUNT), Vec::new());
         let reply = self.transaction(request, "RAP NetShareEnum").await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(refused(reply.status()));
+            return Err(Error::refused(reply.status()));
         }
         let body = reply.transaction().ok_or_else(|| {
             Error::Protocol(Box::new(WireError::NoResponseBody {
@@ -299,7 +299,7 @@ impl Ipc {
                 request.max_data_count,
             ))
             .await
-            .map_err(transport)
+            .map_err(Error::from)
     }
 }
 
@@ -331,25 +331,6 @@ where
     Error::Protocol(Box::new(error))
 }
 
-/// Re-parses a reply's message for a per-command decoder.
-fn parse(reply: &Reply) -> Result<Message> {
-    Ok(Message::parse(reply.message().to_vec())?)
-}
-
-/// A status a server refused an operation with.
-// This mapping and `transport` below belong beside the error type once a second
-// module reaches the connection layer; `rpc/` is the first one to exist.
-fn refused(status: NtStatus) -> Error {
-    match status {
-        NtStatus::INSUFF_SERVER_RESOURCES => Error::TransactionRefused,
-        NtStatus::NETWORK_NAME_DELETED => Error::TreeDisconnected,
-        NtStatus::USER_SESSION_DELETED => Error::ConnectionLost {
-            status: Some(status),
-        },
-        other => Error::Status(other),
-    }
-}
-
 /// A transaction this crate built that will not fit one message.
 fn too_large(error: WireError, request: &'static str) -> Error {
     match error {
@@ -363,28 +344,6 @@ fn too_large(error: WireError, request: &'static str) -> Error {
             limit,
         },
         other => Error::Protocol(Box::new(other)),
-    }
-}
-
-/// What a connection failure means to a caller.
-fn transport(error: crate::connection::Error) -> Error {
-    use crate::connection::Error as Transport;
-    match error {
-        Transport::Io(inner) => Error::Io(inner),
-        Transport::Wire(inner) => Error::Protocol(Box::new(inner)),
-        Transport::Timeout => Error::RequestTimeout,
-        Transport::Reassembly(inner) => Error::Protocol(Box::new(inner)),
-        Transport::SessionDeleted => Error::ConnectionLost {
-            status: Some(NtStatus::USER_SESSION_DELETED),
-        },
-        // Everything else means the connection is gone and the next call must
-        // re-dial. None of them carries a status.
-        Transport::Lost
-        | Transport::Unroutable { .. }
-        | Transport::ChainedResponse(_)
-        | Transport::Silent
-        | Transport::RetirementBudget(_)
-        | Transport::PoolExhausted => Error::ConnectionLost { status: None },
     }
 }
 
