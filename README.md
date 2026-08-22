@@ -33,6 +33,31 @@ The crate is `#![forbid(unsafe_code)]`, every parser an unauthenticated peer can
 reach carries a fuzz target, and allocation from untrusted input is bounded
 wherever it happens.
 
+## Usage
+
+A caller reaches a file through `Client` → `Tree` → `File`, and that is the
+whole opening sequence. `examples/` carries a progression, smallest first, and
+each one is commented where the contract is easy to get subtly wrong:
+
+| Example | What it shows |
+| --- | --- |
+| `list_shares` | Enumerating a server's shares, which needs no share and so comes first in a real program. |
+| `list_dir` | The opening sequence, and a lazy listing drained to its end. |
+| `read_file` | The whole-file helper, `read_exact_at` on a span, `len()` as a hint, and `Error::kind()` beside `Error::status()`. |
+| `write_file` | Writing, and reading `WriteProgress` after a cancelled write — the only way to learn what landed. |
+| `stream_file` | The `AsyncRead` adapter and `tokio::io::copy`, for a file too large to hold in memory. |
+| `walk_tree` | Walking, and closing each listing before acting on what it returned. |
+
+```sh
+cargo run --example list_dir -- '\\127.0.0.1:10445\testshare' smbtest smbtest
+```
+
+Every one takes its server, credentials and paths as arguments. `write_file` is
+the only one that writes, and it creates and then deletes a single obviously
+named file. Set `SMB1_ALLOW_GUEST=1` for a server that maps the logon to guest,
+which the crate refuses by default so that a rejected login cannot pass for a
+successful one.
+
 ## Design
 
 The crate is async-only, on [tokio]. SMB1 is a multiplexed protocol — requests
