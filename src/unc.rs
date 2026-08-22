@@ -27,7 +27,7 @@ use crate::error::{Error, Result};
 pub const DEFAULT_PORT: u16 = 445;
 
 /// The share share enumeration connects to.
-const IPC_SHARE: &str = "IPC$";
+pub(crate) const IPC_SHARE: &str = "IPC$";
 
 /// The server half of a UNC path: a host, and the port to dial it on.
 ///

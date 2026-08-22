@@ -99,7 +99,12 @@ pub mod tree;
 // Open handles: files, listings and the adapters.
 pub mod resource;
 
+// The caching and reconnection layer, and the entry point every consumer
+// reaches the crate through.
+pub mod client;
+
 pub use auth::{Credentials, Password};
+pub use client::{Client, ClientConfig};
 pub use error::{Error, Result};
 pub use resource::{DirEntry, File, FileReader, FileWriter, ReadDir, WriteProgress};
 pub use session::{Session, SessionOptions};

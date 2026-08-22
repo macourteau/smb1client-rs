@@ -373,7 +373,7 @@ impl Peer {
 /// A tree over a duplex pair, with the negotiated parameters injected.
 pub fn tree(negotiated: Negotiated, timeouts: Timeouts) -> (Tree, Peer) {
     let (client, server) = tokio::io::duplex(2 * 1024 * 1024);
-    let connection = transport::spawn(client, negotiated, timeouts);
+    let connection = transport::spawn(client, negotiated, timeouts, false);
     (Tree::attach(connection, 7, 3), Peer { stream: server })
 }
 

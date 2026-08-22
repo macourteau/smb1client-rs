@@ -268,6 +268,7 @@ fn buffered_pair(max_mpx_count: u16, timeouts: Timeouts, buffer: usize) -> (Conn
             capabilities: 0,
         },
         timeouts,
+        false,
     );
     (connection, Peer { stream: server })
 }

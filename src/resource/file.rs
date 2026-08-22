@@ -170,7 +170,7 @@ impl Handle {
                 continue;
             }
             if reply.status() != NtStatus::SUCCESS {
-                return Err(Error::refused(reply.status()));
+                return Err(self.tree.refused(reply.status()));
             }
 
             let data = ReadAndxResponse::decode(reply.parsed())?.data;
@@ -272,7 +272,7 @@ impl Handle {
             }
         }
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.tree.refused(reply.status()));
         }
         let acknowledged = WriteAndxResponse::decode(reply.parsed())?.count as usize;
         let acknowledged = acknowledged.min(chunk.length);
@@ -365,7 +365,7 @@ impl Handle {
         );
         let reply = tree::transaction(&self.tree, request, "TRANS2_SET_FILE_INFORMATION").await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.tree.refused(reply.status()));
         }
         Ok(())
     }

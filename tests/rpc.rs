@@ -124,6 +124,7 @@ fn pair() -> (Ipc, Peer) {
             capabilities: 0,
         },
         Timeouts::default(),
+        false,
     );
     (Ipc::new(connection, TID, UID), Peer { stream: server })
 }

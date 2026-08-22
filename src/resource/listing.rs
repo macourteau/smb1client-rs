@@ -211,7 +211,7 @@ impl ReadDir {
             return Ok(());
         }
         if status != NtStatus::SUCCESS {
-            return Err(Error::refused(status));
+            return Err(self.tree.refused(status));
         }
         let body = reply.transaction().ok_or_else(|| {
             Error::Protocol(Box::new(crate::wire::WireError::NoResponseBody {
