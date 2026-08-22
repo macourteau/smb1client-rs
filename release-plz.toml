@@ -1,4 +1,12 @@
 [workspace]
+# Which prefixes release at all. release-plz bumps a patch for ANY unreleased
+# commit by default, so the commit convention's "no release" row is this regex
+# and nothing else. The `!` alternative is load-bearing: a breaking change is
+# marked by the `!`, not by the type carrying it, so `refactor!:` must release
+# while `refactor:` must not. `commit_parsers`/`skip` is not a substitute — it
+# groups the changelog and does not affect the version bump.
+release_commits = '^feat[(!:]|^fix[(!:]|^[a-z]+(\([^)]*\))?!:'
+
 # The changelog is the release note: generated release notes read from merged
 # pull requests, and this repository's history is not pull-request shaped.
 changelog_update = true

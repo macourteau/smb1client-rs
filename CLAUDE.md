@@ -132,6 +132,19 @@ release policy rather than style:
 | `!` or `BREAKING CHANGE:` | major bump — see the pre-1.0 note below |
 | `ci:` `docs:` `test:` `refactor:` `chore:` | no release |
 
+**That last row is configuration, not a property of `release-plz`.** Its default
+bumps a patch for any unreleased commit whatever the prefix, so a `docs:` commit
+opens a release pull request that auto-merge then ships. What holds the row is
+the `release_commits` regex in `release-plz.toml`; editing that regex edits
+release policy. Its `!` alternative is deliberate — a breaking change is marked
+by the `!` and not by the type carrying it, so `refactor!:` releases while
+`refactor:` does not. `commit_parsers` with `skip = true` is not a substitute:
+it groups the changelog and leaves the version bump alone.
+
+Mark a breaking change with `!` in the subject. Whether a bare `BREAKING CHANGE:`
+trailer in the body reaches the release gate is unverified here, and the `!` is
+what the regex matches.
+
 **A releasable change without a `feat:` or `fix:` prefix never ships.** Nobody
 approves a release: `release-plz` opens a pull request, CI gates it, and
 auto-merge lands it, so the commit message is the only place version discipline
