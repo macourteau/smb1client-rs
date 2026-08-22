@@ -165,11 +165,39 @@ fn the_directory_entry_layout_matches_ms_fscc() {
         number(&vectors, "samba_fragmented_2_name_length")
     );
 
-    // Every entry in the corpus carries an empty short name, which is what
-    // limited the crate's oracle over that field to a prefix check.
+    // The 8.3 short name, which is where MS-FSCC's fixed-width field and this
+    // crate's `ShortNameLength` trim part company. Samba reports none at all,
+    // and one Windows entry reports one filling the field exactly — the single
+    // place the two readings coincide, and so the only entry the absent crate
+    // could have adjudicated.
+    assert!(entries.iter().all(|entry| entry.short_name.is_empty()));
+    let samba = find::walk_entries(&trans2_data("capture/0010-s2c-cmd32.bin"), 6).unwrap();
     assert_eq!(
-        entries.iter().all(|entry| entry.short_name.is_empty()),
-        flag(&vectors, "corpus_short_names_are_all_empty")
+        samba.iter().all(|entry| entry.short_name.is_empty()),
+        flag(&vectors, "samba_short_names_are_all_empty")
+    );
+    let windows = find::walk_entries(&trans2_data("capture-win-b/0012-s2c-cmd32.bin"), 7).unwrap();
+    assert_eq!(
+        windows.iter().all(|entry| entry.short_name.is_empty()),
+        flag(&vectors, "windows_root_short_names_are_all_empty")
+    );
+    let named = windows
+        .iter()
+        .find(|entry| entry.file_name == text(&vectors, "windows_root_5_name"))
+        .expect("the one entry with an 8.3 name");
+    assert_eq!(
+        named.short_name,
+        text(&vectors, "windows_root_5_short_name")
+    );
+    // The length is in bytes and the field is twelve UTF-16 units, so this one
+    // fills it and nothing is trimmed.
+    assert_eq!(
+        named.short_name.chars().count() as i128 * 2,
+        number(&vectors, "windows_root_5_short_name_length_bytes")
+    );
+    assert_eq!(
+        named.short_name.chars().count() as i128,
+        number(&vectors, "fscc_short_name_field_units")
     );
 }
 

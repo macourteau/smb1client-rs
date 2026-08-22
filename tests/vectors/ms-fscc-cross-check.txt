@@ -66,13 +66,19 @@ smb1_query_standard_class = 0x0102
 fscc_reparse_point_entry_reports_ea_size = false
 port_reparse_point_entry_ea_size = 0
 
-# 4. The 8.3 short name. Its `FixedWideString<12>` reads all twelve units and
-#    ignores `ShortNameLength`, so it cannot validate the trim. What it did
-#    validate is that this crate's trimmed name is what remains of those twelve
-#    units once the padding is removed — which held on all 113 entries, every
-#    one of which carries an empty short name.
+# 4. The 8.3 short name. Its `FixedWideString<12>` reads all twelve units
+#    whatever `ShortNameLength` says, so it cannot validate the trim this crate
+#    does. What it did validate is that this crate's trimmed name is what
+#    remains of those twelve units once the padding is removed, which held on
+#    all 113 entries. One entry in the corpus carries a short name at all — the
+#    Windows listing's `gamma-longer-name.dat`, whose twelve units fill the
+#    field exactly and so are the one place the two readings coincide. Every
+#    other entry reports a length of zero against twelve units of padding,
+#    which is where they do not.
 fscc_short_name_honours_the_length_field = false
-corpus_short_names_are_all_empty = true
+fscc_short_name_field_units = 12
+samba_short_names_are_all_empty = true
+windows_root_short_names_are_all_empty = false
 
 # 5. `SMB_INFO_ALLOCATION` (`0x0001`), the legacy level `Tree::statistics`
 #    falls back to. It is SMB1-only and MS-FSCC defines no equivalent, so the
@@ -174,6 +180,12 @@ windows_root_2_end_of_file = 11
 windows_root_2_allocation_size = 16
 windows_root_2_attributes = 0x00000020
 windows_root_2_ea_size = 0
+
+# The one entry in the whole corpus with an 8.3 name. `ShortNameLength` is in
+# bytes and the field is twelve UTF-16 units, so 24 fills it exactly.
+windows_root_5_name = gamma-longer-name.dat
+windows_root_5_short_name = GAMMA-~1.DAT
+windows_root_5_short_name_length_bytes = 24
 
 # --- Samba, the fragmented hundred-entry page. The data block is the two
 # --- messages `fixtures/capture-frag/0010-s2c-cmd32.bin` and `0011-...`
