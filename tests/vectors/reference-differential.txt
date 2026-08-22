@@ -1,0 +1,323 @@
+# The differential run of `session.rs` / `tree.rs` / `resource/` against the Go
+# reference library, pinned at `b948f59`.
+#
+# Build order step 4 requires those three modules to be differentially tested
+# against that library on the Samba container. **That run is development-time
+# and never a CI job** — nothing in CI checks out the Go repository — so its
+# comparisons are committed here as expected values and these are what CI
+# asserts, the same arrangement `auth/` uses at step 3.
+#
+# **How the run was taken.** Both clients drove the seeded acceptance container
+# at `127.0.0.1:10445` (`smbtest`/`smbtest`, share `testshare`) through the same
+# operations in the same order — opening, reading, writing, listing, metadata,
+# rename, delete, directory creation and the filesystem-statistics call — each
+# through its own frame-splitting TCP relay, so every field below was read off
+# the wire rather than off either library's own report. The reference was
+# extracted at the pin with `git archive` and built in isolation: the checkout
+# it came from sits on a branch 26 commits ahead, and those commits include
+# fixes that adopt this port's own decisions, so a run against its working tree
+# would disagree for reasons that are not the port's.
+#
+# **What the container negotiated**, which every derived number below rests on:
+# `MaxBufferSize = 16,644`, `MaxMpxCount = 50`,
+# `Capabilities = 0x8080F3FD` (both large-I/O bits set), Samba 4.23.8.
+#
+# **A disagreement here is read three ways and they are not the same rule.**
+#
+#  1. Where the design lists the reference as known-wrong, the port is right and
+#     the entry records the correct value with the reference's beside it. Those
+#     entries are prefixed `reference_` and each names the list item it belongs
+#     to.
+#  2. Where the reference disagrees with *itself* neither answer is the
+#     reference and the run cannot adjudicate. The chunk-size block below is
+#     that case, and it is the instance build order step 4 says to expect. What
+#     is pinned there is the port's answer, because the port has one.
+#  3. Anything else is a finding. Two are recorded below as `finding_` entries;
+#     they are not asserted as reference behaviour and not reproduced.
+#
+# Format: one `name = value` per line. `#` opens a comment. Numbers are decimal
+# unless they carry an `0x` prefix.
+
+
+# ---------------------------------------------------------------------------
+# The session's own two fields.
+#
+# Recorded for completeness of the comparison and **asserted in
+# `tests/handshake.rs`** rather than here, that file owning the handshake's
+# scripted server. Neither is on the known-wrong list: the design names the
+# advertisement as a choice the reference never made visible, and the client
+# capability word is finding 1 below.
+# ---------------------------------------------------------------------------
+
+port_advertised_max_buffer_size = 65535
+reference_advertised_max_buffer_size = 16644
+
+port_client_capabilities = 0x8000c05c
+reference_client_capabilities = 0x8080f3fd
+
+
+# ---------------------------------------------------------------------------
+# Transaction sizing — known-wrong item 1, `MaxParameterCount` left at 1024.
+#
+# The reference sends the same pair on every TRANS2 subcommand it has: FIND
+# FIRST2 and FIND_NEXT2, QUERY_PATH_INFORMATION, QUERY_FILE_INFORMATION,
+# QUERY_FS_INFORMATION and SET_FILE_INFORMATION alike, 65 requests in the run
+# and not one under the ceiling. The ceiling is Windows 11 24H2's, measured in
+# finding W6 of the evidence campaign: it rejects on the sum alone, at the same
+# threshold however the sum is split.
+# ---------------------------------------------------------------------------
+
+measured_windows_transaction_ceiling = 66524
+
+port_trans2_max_parameter_count = 64
+port_trans2_max_data_count = 65472
+port_trans2_max_setup_count = 0
+port_trans2_flags = 0
+port_trans2_timeout = 0
+
+reference_trans2_max_parameter_count = 1024
+reference_trans2_max_data_count = 65535
+reference_trans2_sum = 66559
+
+
+# ---------------------------------------------------------------------------
+# Directory listing.
+#
+# The FIND_FIRST2 fields agree with the reference and are pinned because the
+# listing rules are written against them: `SearchAttributes = 0x16` decides
+# whether hidden and system entries appear at all, and `0x104` is the level
+# every entry rule in the design is written against.
+#
+# The FIND_NEXT2 flags and the two FIND_CLOSE2 counts are known-wrong item 7.
+# The reference sets `SMB_FIND_CLOSE_AT_EOS` on the FIND_FIRST2 only and sends
+# `SMB_COM_FIND_CLOSE2` nowhere — its encoder exists and its only callers are
+# its own tests — so no listing longer than one batch closes its search at all.
+# ---------------------------------------------------------------------------
+
+port_find_first2_search_attributes = 0x0016
+port_find_first2_search_count = 100
+port_find_first2_flags = 0x0002
+port_find_first2_information_level = 0x0104
+port_find_first2_pattern_root = \*
+port_find_first2_pattern_subdirectory = bigdir\*
+
+port_find_next2_search_count = 100
+port_find_next2_information_level = 0x0104
+port_find_next2_resume_key = 0
+port_find_next2_flags = 0x000a
+reference_find_next2_flags = 0x0008
+
+# `SMB_COM_FIND_CLOSE2` is a one-word command carrying the search id and an
+# empty byte area, and the port sends exactly one for a listing abandoned before
+# end-of-stream and none for one drained to it — the request that ended a
+# drained listing carried `SMB_FIND_CLOSE_AT_EOS`, so the server released the
+# search when it processed it.
+port_find_close2_word_count = 1
+port_find_close2_byte_count = 0
+port_find_close2_on_dropped_listing = 1
+port_find_close2_on_drained_listing = 0
+reference_find_close2_ever_sent = 0
+
+
+# ---------------------------------------------------------------------------
+# `NT_CREATE_ANDX`, which is every open, every create and every delete.
+#
+# The five fields the verbs vary, one line per verb. `share_access` and
+# `desired_access` are the two deliberate departures the design names: the port
+# offers `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` where the
+# reference offers `0x3` and so denies a deleter what this port admits, and the
+# port asks for the rights it will use where the reference asks for the
+# `GENERIC_*` groups plus `SYNCHRONIZE`. Neither is a known-wrong item; both are
+# client-side values no server has been sent, and they travel together on the
+# conformance script.
+# ---------------------------------------------------------------------------
+
+# `Tree::open` — FILE_READ_DATA | FILE_READ_ATTRIBUTES.
+port_open_read_desired_access = 0x00000081
+port_open_read_disposition = 1
+port_open_read_options = 0x00000040
+port_open_read_file_attributes = 0x00000080
+
+# `Tree::open_with(read + write)` — the two pairs unioned.
+port_open_read_write_desired_access = 0x00000183
+port_open_read_write_disposition = 1
+port_open_read_write_options = 0x00000040
+port_open_read_write_file_attributes = 0x00000080
+
+# `Tree::write` and `Tree::create` — FILE_OVERWRITE_IF.
+port_create_truncate_desired_access = 0x00000102
+port_create_truncate_disposition = 5
+port_create_truncate_options = 0x00000040
+port_create_truncate_file_attributes = 0x00000080
+
+# `Tree::create_dir` — FILE_WRITE_ATTRIBUTES alone, FILE_CREATE.
+port_create_dir_desired_access = 0x00000100
+port_create_dir_disposition = 2
+port_create_dir_options = 0x00000001
+port_create_dir_file_attributes = 0x00000080
+
+# `Tree::remove_file` — DELETE alone, FILE_DELETE_ON_CLOSE on a non-directory.
+port_remove_file_desired_access = 0x00010000
+port_remove_file_disposition = 1
+port_remove_file_options = 0x00001040
+port_remove_file_file_attributes = 0x00000000
+
+# `Tree::remove_dir` — the same, with FILE_DIRECTORY_FILE instead.
+port_remove_dir_desired_access = 0x00010000
+port_remove_dir_disposition = 1
+port_remove_dir_options = 0x00001001
+port_remove_dir_file_attributes = 0x00000000
+
+# What the caller never reaches, on every one of the six above.
+port_create_share_access = 0x00000007
+port_create_flags = 0
+port_create_root_directory_fid = 0
+port_create_allocation_size = 0
+port_create_impersonation_level = 2
+port_create_security_flags = 0
+
+# `FileAttributes` is `FILE_ATTRIBUTE_NORMAL` on the two creating dispositions,
+# which is the design's rule and what the reference sends. It is `0x80` on the
+# port's plain opens too and `0` on its two delete opens, and the design's rule
+# speaks only of a create — finding 4 below. The reference sends `0x80` on all
+# six.
+reference_file_attributes = 0x00000080
+
+# `SYNCHRONIZE`, which no request the port sends may carry.
+synchronize_right = 0x00100000
+
+reference_open_read_desired_access = 0x80100000
+reference_create_desired_access = 0x40100000
+reference_non_delete_share_access = 0x00000003
+reference_delete_share_access = 0x00000007
+
+
+# ---------------------------------------------------------------------------
+# `SMB_COM_RENAME`.
+#
+# `SearchAttributes` agrees with the reference and is pinned because a narrower
+# value would leave a hidden or system file, or a directory, unrenameable. Both
+# names go on the wire with a leading backslash, which is the one command whose
+# path is not the normalized share-relative form; the vector is the whole byte
+# area the port builds for one known pair, buffer-format bytes included.
+# ---------------------------------------------------------------------------
+
+port_rename_search_attributes = 0x0016
+port_rename_byte_area_hex = 045c0064006900720065006300740069006f006e005c0061002e00620069006e00000004005c0064006900720065006300740069006f006e005c0062002e00620069006e000000
+
+
+# ---------------------------------------------------------------------------
+# Chunk size — the second reading, and the one build order step 4 names.
+#
+# **Neither answer is the reference here.** The reference's chunk size turns on
+# which of its own four paths a transfer takes, and those paths do not agree
+# with each other on the connection the run measured:
+#
+#   - a whole-file read under 128 KiB takes `readSequential`, which clamps to
+#     `MaxBufferSize - 1024`, so 16,644 - 1,024 = 15,620;
+#   - a whole-file read at or above 128 KiB takes `readPipelined`, which does
+#     not consult the negotiated buffer at all and asks for 130,048;
+#   - a `ReadAt` of any size takes `readAtChunk`, which does not consult it
+#     either and asked for the whole 102,400 of a 100 KiB span;
+#   - a write under 256 KiB takes `writeSequential`, clamped to that same
+#     15,620, and one at or above it takes `writePipelined`'s flat 130,048.
+#
+# So one connection, one negotiated buffer, three different answers — and the
+# design's own account of this had two, the unclamped `readAtChunk` path being
+# a third the run found. The port sizes chunks by one rule whatever the
+# transfer, so it necessarily differs from the reference on the sequential side
+# of both thresholds. That disagreement is the reference's inconsistency and
+# what is pinned is the port's answer.
+#
+# The port's rule has three cases and the run exercised the first; the other two
+# are named here because they are what a wrong implementation would reach for.
+# ---------------------------------------------------------------------------
+
+container_negotiated_max_buffer_size = 16644
+protocol_overhead_reservation = 1024
+
+# With `CAP_LARGE_READX` / `CAP_LARGE_WRITEX`, which the container offers: the
+# frame limit less the reservation, and the negotiated buffer does not enter.
+port_chunk_size_with_large_io = 130048
+# Without them: the 16-bit field that asks for the bytes, under the buffer.
+port_chunk_size_without_large_io = 15620
+# After the one-shot downgrade: the negotiated buffer under the reservation.
+port_chunk_size_after_downgrade = 15620
+
+# The whole point of the entry above: 15,620 is where the port arrives only when
+# the server lacks the capability or has refused a large transfer, and it is
+# where the reference arrives with the capability present and nothing refused.
+reference_sequential_clamp = 15620
+
+# A 100 KiB transfer — under the 128 KiB read and 256 KiB write thresholds.
+port_read_chunks_100k = 102400
+port_write_chunks_100k = 102400
+reference_read_chunks_100k = 15620,15620,15620,15620,15620,15620,8681
+reference_write_chunks_100k = 15620,15620,15620,15620,15620,15620,8680
+
+# A 512 KiB transfer — over both. Here the two agree.
+port_read_chunks_512k = 130048,130048,130048,130048,4096
+port_write_chunks_512k = 130048,130048,130048,130048,4096
+reference_write_chunks_512k = 130048,130048,130048,130048,4096
+
+# A `ReadAt` of 100 KiB, where the reference's third path agrees with the port
+# by not consulting the buffer either.
+reference_readat_chunks_100k = 102400
+
+port_write_mode = 0
+
+
+# ---------------------------------------------------------------------------
+# The fill loop, visible on the wire.
+#
+# A 32-byte span asked for 8 bytes before end of file: the server answers 8, and
+# the port re-issues the 24 it did not return rather than reading the short
+# answer as the end. The reference stops at the first short chunk and reports
+# `io.EOF` — known-wrong item 8 — which against this container happens to be the
+# right answer and against Windows, which serves `min(asked, 65536)` on every
+# read, loses the rest of the file silently.
+#
+# `read_exact_at` cannot fill the span either way, so the two libraries differ
+# in what they return as well as in what they send; that difference is the
+# fill-or-error contract the design chose and not a defect on either side.
+# ---------------------------------------------------------------------------
+
+port_read_chunks_short_far_end = 32,24
+reference_read_chunks_short_far_end = 32
+
+
+# ---------------------------------------------------------------------------
+# Findings — the third reading. Neither is reproduced and neither is asserted
+# as reference behaviour; both are recorded here because the run produced them.
+# ---------------------------------------------------------------------------
+
+# Finding 1. The reference echoes the server's capability word verbatim in its
+# `SESSION_SETUP_ANDX`, claiming three capabilities it does not implement:
+# `CAP_RAW_MODE` (0x1), `CAP_RPC_REMOTE_APIS` (0x20) and `CAP_UNIX_EXTENSIONS`
+# (0x800000). It is the capability-word counterpart of the `MaxBufferSize` echo
+# the design does name, and it is on no list.
+finding_reference_capability_echo_extra_bits = 0x00800021
+
+# Finding 2. Deleting a non-empty directory reports success and deletes
+# nothing, on both libraries. Samba answers the `NT_CREATE_ANDX` carrying
+# `FILE_DELETE_ON_CLOSE` with `STATUS_SUCCESS` and the following `CLOSE` with
+# `STATUS_SUCCESS`, and drops the unlink; no status on the wire says so, so
+# neither client can see it. `std::fs::remove_dir` errors in this case, and the
+# port's naming rule invites that expectation.
+finding_remove_dir_nonempty_status = 0x00000000
+
+# Finding 3. The reference's `Remove` spends four round trips where the design
+# says three: it stats the path first, and its stat is two
+# `TRANS2_QUERY_PATH_INFORMATION` requests rather than one, at levels 0x0101 and
+# 0x0102. The port sends two round trips, the open and the close.
+port_remove_round_trips = 2
+reference_remove_round_trips = 4
+
+# Finding 4. `FileAttributes` on `NT_CREATE_ANDX` is `0x80` on four of the
+# port's six opens and `0` on the two delete opens, and the design's field table
+# states the rule only for a create. The field is ignored by a server that is
+# not creating, so nothing turns on it; what is recorded is that the rule as
+# written does not decide the four non-creating cases, and the port answers them
+# two ways.
+finding_file_attributes_on_non_creating_opens = 0x00000080
+finding_file_attributes_on_delete_opens = 0x00000000
