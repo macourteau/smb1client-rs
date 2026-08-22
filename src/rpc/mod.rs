@@ -195,6 +195,15 @@ impl Ipc {
                 debug!(shares = shares.len(), "RAP enumerated the server's shares");
                 return Ok(shares);
             }
+            // The fall-through is wide because a server's refusal of RAP is not
+            // reliably one status — but a connection that has died, or a tree
+            // the server has discarded, is not a refusal of RAP at all. A second
+            // full attempt over the same dead connection cannot succeed, and
+            // wrapping the outcome would hide the classification the caller and
+            // the connection cache both act on.
+            Err(fatal @ (Error::ConnectionLost { .. } | Error::TreeDisconnected)) => {
+                return Err(fatal);
+            }
             Err(error) => {
                 debug!("RAP could not enumerate shares, falling through to srvsvc: {error}");
                 error

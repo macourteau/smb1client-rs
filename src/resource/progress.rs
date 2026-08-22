@@ -146,10 +146,11 @@ impl WriteProgress {
 
     /// A ticket for one chunk, which enters the group here and leaves it when
     /// the request ends.
-    pub(crate) fn chunk(&self, offset: u64) -> Arc<Chunk> {
+    pub(crate) fn chunk(&self, offset: u64, offered: usize) -> Arc<Chunk> {
         self.lock().outstanding += 1;
         Arc::new(Chunk {
             inner: self.inner.clone(),
+            offered,
             offset,
             applied: AtomicBool::new(false),
         })
@@ -212,6 +213,14 @@ impl Drop for Issuing {
 pub(crate) struct Chunk {
     inner: Arc<Inner>,
     offset: u64,
+    /// How many bytes this chunk actually offered the server.
+    ///
+    /// The acknowledgement is clamped to it. A `WRITE_ANDX` reply is free to
+    /// claim a count larger than the request carried, and invariant 4 says this
+    /// handle never reports more than the contiguous prefix that *reached* the
+    /// server — so an over-claiming reply must not be able to inflate the
+    /// number a caller resumes a transfer from.
+    offered: usize,
     /// Whether the outcome has been applied. A chunk whose request never
     /// reaches the actor at all — the future built and then dropped when the
     /// caller gave up — leaves the group here instead, so the group can never
@@ -257,6 +266,7 @@ impl RequestOutcome for Chunk {
             match outcome {
                 Ok(reply) => match acknowledged(reply) {
                     Some(count) if count > 0 => {
+                        let count = count.min(self.offered);
                         let at = self.offset.saturating_sub(state.base) as usize;
                         if !state.covered.cover(at, count) {
                             debug!(

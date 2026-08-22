@@ -39,7 +39,7 @@
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{Connection, Negotiated, Timeouts};
+use super::{Connection, MIN_BUFFER_SIZE, Negotiated, Timeouts};
 
 /// Puts a connection actor on an already-negotiated, already-authenticated
 /// stream, and returns a handle on it.
@@ -61,5 +61,10 @@ pub fn spawn<S>(
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
+    assert!(
+        negotiated.max_buffer_size >= MIN_BUFFER_SIZE,
+        "MaxBufferSize {} is below the {MIN_BUFFER_SIZE}-byte SMB1 minimum",
+        negotiated.max_buffer_size,
+    );
     super::actor::spawn(stream, negotiated, timeouts, dump_bytes)
 }

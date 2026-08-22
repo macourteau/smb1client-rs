@@ -87,6 +87,16 @@ pub const SMALL_IO_CHUNK: usize = 65_520;
 /// the negotiate response arrived.
 pub const PROTOCOL_OVERHEAD: u32 = 1_024;
 
+/// The SMB1 minimum `MaxBufferSize`, which Windows 11 24H2 advertises exactly.
+///
+/// Every subtraction of [`PROTOCOL_OVERHEAD`] is plain arithmetic because this
+/// floor holds, and it holds at both doors into a connection: the handshake
+/// fails a negotiate response below it, and [`transport::spawn`] — the test
+/// seam, which bypasses the handshake — asserts it. Guarding the subtractions
+/// instead would carry a nonsense buffer size forward silently, which is the
+/// shape this design rejects.
+pub const MIN_BUFFER_SIZE: u32 = 4_356;
+
 /// The two timing bounds the connection works to.
 ///
 /// The connect timeout is not among them: it bounds the dial and the handshake,
@@ -449,10 +459,8 @@ impl Connection {
     /// is the only case that changes what a capability-bearing server is asked
     /// for.
     fn chunk_size(&self, capability: u32) -> usize {
-        let buffered = self
-            .negotiated
-            .max_buffer_size
-            .saturating_sub(PROTOCOL_OVERHEAD) as usize;
+        // Plain arithmetic: `MIN_BUFFER_SIZE` is enforced at both doors.
+        let buffered = (self.negotiated.max_buffer_size - PROTOCOL_OVERHEAD) as usize;
         if self.downgraded.load(Ordering::Relaxed) {
             return buffered;
         }

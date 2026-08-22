@@ -134,15 +134,30 @@ impl Handle {
 
         loop {
             while issued.len() < depth {
-                let span = queue.pop().or_else(|| {
-                    (!at_end && next < buffer.len()).then(|| {
-                        let chunk = self.tree.connection().read_chunk_size().max(1);
-                        let length = chunk.min(buffer.len() - next);
-                        let span = (next, length);
-                        next += length;
-                        span
+                let chunk_size = self.tree.connection().read_chunk_size().max(1);
+                // A re-queued span is re-clamped, and that is the whole of what
+                // makes the one-shot downgrade work. A span lands back on this
+                // queue because the server refused its size; handing it back
+                // unchanged would ask again at exactly the size just refused,
+                // and the retry would fail for the reason the first attempt did.
+                // Anything left over goes back for the round after.
+                let span = queue
+                    .pop()
+                    .map(|(start, length)| {
+                        let take = chunk_size.min(length);
+                        if take < length {
+                            queue.push((start + take, length - take));
+                        }
+                        (start, take)
                     })
-                });
+                    .or_else(|| {
+                        (!at_end && next < buffer.len()).then(|| {
+                            let length = chunk_size.min(buffer.len() - next);
+                            let span = (next, length);
+                            next += length;
+                            span
+                        })
+                    });
                 let Some((start, length)) = span else { break };
                 issued.push(self.read_chunk(offset + start as u64, start, length));
             }
@@ -213,15 +228,25 @@ impl Handle {
 
         loop {
             while failure.is_none() && issued.len() < depth {
-                let span = queue.pop().or_else(|| {
-                    (next < data.len()).then(|| {
-                        let chunk = self.tree.connection().write_chunk_size().max(1);
-                        let length = chunk.min(data.len() - next);
-                        let span = (next, length);
-                        next += length;
-                        span
+                let chunk_size = self.tree.connection().write_chunk_size().max(1);
+                // Re-clamped on the way out, for the reason the read loop gives.
+                let span = queue
+                    .pop()
+                    .map(|(start, length)| {
+                        let take = chunk_size.min(length);
+                        if take < length {
+                            queue.push((start + take, length - take));
+                        }
+                        (start, take)
                     })
-                });
+                    .or_else(|| {
+                        (next < data.len()).then(|| {
+                            let length = chunk_size.min(data.len() - next);
+                            let span = (next, length);
+                            next += length;
+                            span
+                        })
+                    });
                 let Some((start, length)) = span else { break };
                 let at = offset + start as u64;
                 issued.push(self.write_chunk(at, start, &data[start..start + length], progress));
@@ -335,7 +360,7 @@ impl Handle {
         // The ticket enters the chunk group here and leaves it when the request
         // ends — whichever way it ends, and whether or not this future is still
         // being awaited by then.
-        let ticket = progress.chunk(at);
+        let ticket = progress.chunk(at, length);
         Chunk {
             start,
             length,
@@ -403,6 +428,14 @@ struct Chunk<'a> {
 /// Written by hand rather than reached for from a combinator crate: the depth is
 /// four, so polling each in turn costs nothing, and a `Stream` or a `FuturesUnordered`
 /// would put a pre-1.0 dependency in the crate for it.
+/// Polls the outstanding chunks and returns the first that answers.
+///
+/// It stops at the first `Poll::Ready`, leaving higher-index futures unpolled —
+/// and a chunk's request is not sent until its future is first polled, so that
+/// would serialise a batch if it could happen. It cannot: every chunk pends on
+/// its first poll, having only just been issued, so all of them are dispatched
+/// before any is ready. The note is here because the other reading is the
+/// natural one.
 async fn first_answered<'a>(issued: &mut Vec<Chunk<'a>>) -> (Chunk<'a>, Result<Reply>) {
     std::future::poll_fn(|context| {
         for index in 0..issued.len() {
@@ -602,7 +635,20 @@ impl File {
             1
         };
         let fill = self.handle.read_span(&mut buffer, 0, depth).await?;
-        buffer.truncate(fill.covered.prefix());
+        // The exemption is for a short *far end* and nothing else. A hole with
+        // covered bytes beyond it is a different condition — truncating to the
+        // prefix would discard everything after it and report success, which is
+        // the silent truncation this exemption was never meant to license.
+        let prefix = fill.covered.prefix();
+        if let Some((at, end)) = fill.covered.gap(buffer.len())
+            && end < buffer.len()
+        {
+            return Err(Error::UnfilledSpan {
+                at,
+                length: end - at,
+            });
+        }
+        buffer.truncate(prefix);
         Ok(buffer)
     }
 

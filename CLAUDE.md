@@ -102,8 +102,18 @@ docker exec smb1client-acceptance /usr/local/bin/seed.sh
 docker exec smb1client-acceptance /usr/local/bin/assert-nt1.sh
 SMB1_TEST_SERVER=127.0.0.1:10445 SMB1_TEST_SHARE=testshare \
 SMB1_TEST_USER=smbtest SMB1_TEST_PASSWORD=smbtest \
+SMB1_TEST_SEEDED_DIR=bigdir SMB1_TEST_SEEDED_COUNT=600 \
+SMB1_TEST_EMPTY_DIR=emptydir SMB1_TEST_READ_FILE=alpha.txt \
   cargo test --locked -- --include-ignored
 ```
+
+**The seeded variables are not optional here.** Without them the two live checks
+the design names — a listing of the 600-entry directory returning 600, and an
+empty directory returning no entries and no error — print a line saying they were
+skipped and then report `ok`. That is right for a developer pointing the suite at
+an arbitrary server and wrong for an acceptance run: you get a green result that
+never exercised either. The CI job sets them and greps its own output to prove
+they ran; a local run has only this line to rely on.
 
 `assert-nt1.sh` is not decoration and must not be replaced by an `smbclient`
 invocation that reads its exit status: **smbclient exits 0 when protocol

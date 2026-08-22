@@ -165,6 +165,8 @@ pub struct FileWriter {
     depth: usize,
     buffer: Vec<u8>,
     flushing: Option<Flushing>,
+    /// The length the file reaches if the flush in progress succeeds.
+    pending_length: Option<u64>,
 }
 
 impl std::fmt::Debug for FileWriter {
@@ -199,6 +201,7 @@ impl FileWriter {
             depth,
             buffer: Vec::with_capacity(capacity),
             flushing: None,
+            pending_length: None,
         })
     }
 
@@ -251,11 +254,18 @@ impl FileWriter {
         }
         let span = std::mem::take(&mut self.buffer);
         let at = self.cursor;
+        // The cursor advances here and the file's length does not. The cursor
+        // has to: the caller's next `write` buffers at the position after this
+        // flush, which is what lets the two overlap at all. The length is a
+        // claim about what the server holds, so it waits until the flush says
+        // the server holds it — otherwise a failed flush leaves `File::len`
+        // over-reporting bytes that never landed.
         self.cursor += span.len() as u64;
-        self.file.grew_to(self.cursor);
+        let grown_to = self.cursor;
         let handle = self.handle.clone();
         let progress = self.progress.clone();
         let depth = self.depth;
+        self.pending_length = Some(grown_to);
         self.flushing = Some(Box::pin(async move {
             let outcome = handle.write_span(&span, at, depth, &progress).await;
             (span, outcome)
@@ -271,6 +281,9 @@ impl FileWriter {
         self.flushing = None;
         self.buffer = buffer;
         self.buffer.clear();
+        if let (Ok(()), Some(length)) = (&outcome, self.pending_length.take()) {
+            self.file.grew_to(length);
+        }
         Poll::Ready(outcome.map_err(io::Error::from))
     }
 }

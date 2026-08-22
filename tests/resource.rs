@@ -237,15 +237,23 @@ async fn a_refused_chunk_downgrades_the_connection_once_and_retries_it() {
     let downgraded = (negotiated.max_buffer_size - 1_024) as usize;
     let file = open(&tree, &mut peer, CHUNK as u64).await;
 
+    // The span must be **larger** than the downgraded chunk, or the first
+    // request is already small and the test cannot tell a retry that re-clamps
+    // from one that re-sends the size the server just refused. An earlier
+    // version read exactly `downgraded` bytes and proved nothing.
     let reading = tokio::spawn(async move {
-        let mut buffer = vec![0; downgraded];
+        let mut buffer = vec![0; CHUNK];
         file.read_exact_at(&mut buffer, 0).await?;
         let mut again = vec![0; downgraded];
         file.read_exact_at(&mut again, 0).await
     });
 
     let first = peer.frame().await;
-    assert_eq!(read_request(&first).1, downgraded as u32);
+    assert_eq!(
+        read_request(&first).1,
+        CHUNK as u32,
+        "the first ask is the large chunk the capabilities allow"
+    );
     peer.send(&bodyless(
         READ_ANDX,
         NtStatus::INVALID_PARAMETER,
@@ -253,11 +261,32 @@ async fn a_refused_chunk_downgrades_the_connection_once_and_retries_it() {
     ))
     .await;
 
-    // The same operation, retried once, at the downgraded size.
+    // The same operation, retried once, and re-clamped: asking again at the
+    // refused size would fail for the reason the first attempt did.
     let retry = peer.frame().await;
-    assert_eq!(read_request(&retry).1, downgraded as u32);
+    assert_eq!(
+        read_request(&retry).1,
+        downgraded as u32,
+        "the retry asks at MaxBufferSize - 1024, not at the refused size"
+    );
     peer.send(&read_response(mid_of(&retry), &vec![0xD4; downgraded]))
         .await;
+
+    // The rest of that same span, in as many rounds as the downgraded size
+    // takes. What is asserted is the property rather than the arithmetic: no
+    // request after the downgrade exceeds it, which is the whole point of it.
+    let mut covered = downgraded;
+    while covered < CHUNK {
+        let more = peer.frame().await;
+        let (_, length) = read_request(&more);
+        assert!(
+            length as usize <= downgraded,
+            "a request after the downgrade asked for {length}, above the {downgraded} it is bounded by"
+        );
+        peer.send(&read_response(mid_of(&more), &vec![0xD4; length as usize]))
+            .await;
+        covered += length as usize;
+    }
 
     // The next read is bounded the same way without asking again.
     let later = peer.frame().await;

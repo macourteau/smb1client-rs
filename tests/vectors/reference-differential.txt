@@ -160,13 +160,13 @@ port_create_dir_file_attributes = 0x00000080
 port_remove_file_desired_access = 0x00010000
 port_remove_file_disposition = 1
 port_remove_file_options = 0x00001040
-port_remove_file_file_attributes = 0x00000000
+port_remove_file_file_attributes = 0x00000080
 
 # `Tree::remove_dir` — the same, with FILE_DIRECTORY_FILE instead.
 port_remove_dir_desired_access = 0x00010000
 port_remove_dir_disposition = 1
 port_remove_dir_options = 0x00001001
-port_remove_dir_file_attributes = 0x00000000
+port_remove_dir_file_attributes = 0x00000080
 
 # What the caller never reaches, on every one of the six above.
 port_create_share_access = 0x00000007
@@ -313,11 +313,13 @@ finding_remove_dir_nonempty_status = 0x00000000
 port_remove_round_trips = 2
 reference_remove_round_trips = 4
 
-# Finding 4. `FileAttributes` on `NT_CREATE_ANDX` is `0x80` on four of the
-# port's six opens and `0` on the two delete opens, and the design's field table
-# states the rule only for a create. The field is ignored by a server that is
-# not creating, so nothing turns on it; what is recorded is that the rule as
-# written does not decide the four non-creating cases, and the port answers them
-# two ways.
-finding_file_attributes_on_non_creating_opens = 0x00000080
-finding_file_attributes_on_delete_opens = 0x00000000
+# Finding 4, since resolved. The differential run found `FileAttributes` at
+# `0x80` on four of the port's six opens and `0` on the two delete opens. An
+# earlier revision of this file said the design's field table "states the rule
+# only for a create", which was wrong about the document it cited: the table
+# says `0x80` on **every** request, and gives the reason — a rule deciding only
+# the creating opens leaves the rest to be answered differently by whoever
+# writes each, which is how a fixture stops pinning anything. The port now sends
+# one value everywhere, and both entries below are that value.
+file_attributes_on_non_creating_opens = 0x00000080
+file_attributes_on_delete_opens = 0x00000080

@@ -316,6 +316,19 @@ impl Message {
         self.byte_count
     }
 
+    /// The byte area's length, bounded by what the frame actually holds.
+    ///
+    /// **Not `byte_count()`.** That field is 16 bits and wraps, and the rule
+    /// this module opens with is that it is never used as a length. No command
+    /// decoded here can carry a byte area past 64 KiB, so no wrap is reachable
+    /// today — but the next command added would inherit the pattern, and the
+    /// frame length is the bound that cannot lie. Taking the smaller of the two
+    /// means a wrapped count truncates rather than reading past the message.
+    pub fn byte_area_len(&self) -> usize {
+        let remaining = self.bytes.len().saturating_sub(self.byte_area_offset());
+        usize::from(self.byte_count).min(remaining)
+    }
+
     /// Where the byte area begins, measured from the start of the SMB message.
     pub fn byte_area_offset(&self) -> usize {
         HEADER_LEN + 1 + usize::from(self.word_count) * 2 + 2

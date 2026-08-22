@@ -318,6 +318,47 @@ async fn invariant_4_the_connection_dying_leaves_the_chunk_group() {
 /// **What a plausible wrong implementation does.** One recording what the chunk
 /// asked to write reports 130,048 bytes as having reached the server, which is
 /// the one thing the prefix exists to get right: a caller resuming there skips
+/// **Invariant 4: an over-acknowledging server cannot inflate the prefix.**
+///
+/// A `WRITE_ANDX` reply is free to claim a count larger than the request
+/// carried, and nothing on the wire prevents it. The invariant says the handle
+/// never reports more than the contiguous prefix that *reached* the server, so
+/// the acknowledgement is clamped to what the chunk actually offered.
+///
+/// What this catches: recording the reply's count unclamped. That is what the
+/// handle did until this test existed — the fill loop clamped on its own path
+/// and the progress ticket did not, so the two readings of one reply disagreed
+/// and only the unclamped one fed `written()`. A caller resuming from it would
+/// skip bytes that were never sent.
+#[tokio::test(start_paused = true)]
+async fn invariant_4_an_over_acknowledgement_cannot_inflate_the_prefix() {
+    let (tree, mut peer) = tree(large_io(), Timeouts::default());
+    let file = open(&tree, &mut peer).await;
+
+    let progress = WriteProgress::new();
+    let writing = tokio::spawn({
+        let progress = progress.clone();
+        async move {
+            file.write_all_at(&vec![0xAB; 1_000], 0, Some(progress))
+                .await
+        }
+    });
+
+    let first = peer.frame().await;
+    assert_eq!(write_request(&first), (0, 1_000));
+    // The server claims far more than it was offered.
+    peer.send(&write_response(mid_of(&first), CHUNK as u32))
+        .await;
+
+    writing.await.unwrap().expect("the write completed");
+    progress.completed().await;
+    assert_eq!(
+        progress.written(),
+        1_000,
+        "the prefix is what was offered, not what the reply claimed"
+    );
+}
+
 /// 129,048 bytes it never wrote.
 #[tokio::test(start_paused = true)]
 async fn invariant_4_a_short_acknowledgement_records_what_the_reply_said() {

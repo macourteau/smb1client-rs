@@ -153,7 +153,16 @@ impl<'a> Reader<'a> {
         let characters_at = self.at;
         // The count is a server-supplied number, so the bytes are taken from
         // the stub before anything is sized from it.
-        let bytes = self.take(field, usize::try_from(actual).unwrap_or(usize::MAX) * 2)?;
+        // Saturating, not `* 2`: `actual` is a server-supplied `u32`, and on a
+        // 32-bit target every value of it converts, so a count at or above
+        // 0x8000_0000 overflows the multiply — a debug panic inside a parser an
+        // unauthenticated peer reaches, or a wrapped small length in release.
+        // `Reader::take` bounds the result but cannot see the multiply.
+        let wide = usize::try_from(actual)
+            .ok()
+            .and_then(|count| count.checked_mul(2))
+            .unwrap_or(usize::MAX);
+        let bytes = self.take(field, wide)?;
         let units: Vec<u16> = bytes
             .as_chunks::<2>()
             .0

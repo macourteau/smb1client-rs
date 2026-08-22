@@ -277,7 +277,7 @@ impl Tree {
     /// **A tree somebody else still holds returns `Ok` having sent nothing**,
     /// because disconnecting a tree other callers hold would invalidate handles
     /// they still own. The `TREE_DISCONNECT` goes out when the last owner is
-    /// gone — which, once the connection cache exists, is when its own entry is
+    /// gone — which, where the connection cache holds it, is when its own entry is
     /// evicted or the client is closed.
     pub async fn close(self) -> Result<()> {
         let Some(inner) = Arc::into_inner(self.inner) else {
@@ -663,7 +663,11 @@ impl Tree {
                 root_directory_fid: 0,
                 desired_access: DELETE,
                 allocation_size: 0,
-                ext_file_attributes: 0,
+                // `FILE_ATTRIBUTE_NORMAL` here as on every other open. The
+                // field means something only where the disposition creates, and
+                // this one does not — but one value everywhere is the rule, so
+                // that no fixture stops pinning it.
+                ext_file_attributes: info::ATTRIBUTE_NORMAL,
                 share_access: SHARE_ALL,
                 create_disposition: FILE_OPEN,
                 create_options: kind | FILE_DELETE_ON_CLOSE,

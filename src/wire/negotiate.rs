@@ -70,7 +70,7 @@ impl NegotiateRequest {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
         let mut dialects = Vec::new();
         let mut rest = area;
@@ -157,7 +157,7 @@ impl NegotiateResponse {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
         let (guid, blob) = area.split_at_checked(16).ok_or(WireError::Truncated {
             part: "ServerGUID",

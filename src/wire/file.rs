@@ -146,7 +146,7 @@ impl NtCreateAndxRequest {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
         let name = area
             .get(1..1 + usize::from(words.name_length))
@@ -344,7 +344,7 @@ impl RenameRequest {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
 
         let old = utf16_field("OldFileName", area, 1)?;

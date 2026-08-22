@@ -19,7 +19,7 @@ pub struct AndX {
     /// Where the next command's word block begins.
     ///
     /// It is read and ignored. It is emphatically **not** asserted zero beside
-    /// the sentinel: five committed frames carry a non-zero offset with
+    /// the sentinel: thirteen committed frames carry a non-zero offset with
     /// `AndXCommand = 0xFF`, and in every one the offset equals the SMB message
     /// length exactly, so a parser that seeks to it before checking the
     /// sentinel lands on the buffer boundary and the bug surfaces as an empty

@@ -92,7 +92,7 @@ impl TreeConnectAndxRequest {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
 
         let password_length = usize::from(words.password_length);
@@ -150,7 +150,7 @@ impl TreeConnectAndxResponse {
         let area = message.block(
             "ByteCount",
             message.byte_area_offset(),
-            usize::from(message.byte_count()),
+            message.byte_area_len(),
         )?;
         let service_end = area
             .iter()

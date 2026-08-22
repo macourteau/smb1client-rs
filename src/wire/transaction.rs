@@ -591,6 +591,13 @@ fn decode_name(byte_area_offset: usize, region: &[u8]) -> Result<TransactionName
         .iter()
         .position(|&byte| byte == 0)
         .unwrap_or(region.len());
+    // The one lossy decode in this crate, and it is bounded to a place where
+    // nothing acts on the result. A *filename* that is not valid UTF-16 fails
+    // its listing rather than coming back mangled, because a caller would go on
+    // to use it as a path. This is a transaction name on the decode side only:
+    // the port never builds an ASCII one, so the only bytes that reach here are
+    // a captured frame's, and what the text is used for is a fixture assertion
+    // and a log line.
     Ok(TransactionName {
         text: String::from_utf8_lossy(&region[..end]).into_owned(),
         encoding: NameEncoding::Ascii,

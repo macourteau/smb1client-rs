@@ -28,7 +28,7 @@
 
 use tracing::{debug, warn};
 
-use crate::connection::{Connection, Request};
+use crate::connection::{Connection, PROTOCOL_OVERHEAD, Request};
 use crate::error::{Error, Result};
 use crate::status::NtStatus;
 use crate::wire::WireError;
@@ -39,14 +39,6 @@ use crate::wire::transaction::TransactionRequest;
 
 use super::pdu::{Answer, Collector};
 use super::{protocol, too_large};
-
-/// What a message carries before its payload does.
-///
-/// The reference library's `SMBProtocolOverhead`, carried rather than derived:
-/// a message carries its NetBIOS header, its SMB header, its words and its
-/// `ByteCount` before it carries a byte of payload, so asking for exactly
-/// `MaxBufferSize` overruns the buffer by however much of it those take.
-const PROTOCOL_OVERHEAD: u32 = 1024;
 
 /// The most bytes one pipe read may ask for.
 ///
@@ -315,10 +307,12 @@ impl Pipe {
 
     /// The most bytes one read or write on this pipe moves.
     fn transfer_size(&self) -> u32 {
-        self.connection
+        (self.connection
             .negotiated()
             .max_buffer_size
-            .saturating_sub(PROTOCOL_OVERHEAD)
+            // Plain arithmetic, and the crate's one overhead constant: a second
+            // copy of either would drift from this one.
+            - PROTOCOL_OVERHEAD)
             .min(MAX_PIPE_TRANSFER)
     }
 }
