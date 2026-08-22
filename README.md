@@ -9,9 +9,10 @@ SMB crate implements SMB2/SMB3 only, and the most-downloaded alternative is a
 GPLv3 FFI wrapper around libsmbclient — so this is a port of a pure-Go SMB1
 library, written to keep the same servers reachable from Rust.
 
-> **Status: unreleased.** The API is implemented and exercised against four
-> SMB1 servers, and it carries no version anyone can depend on yet. It is not
-> published to crates.io.
+> **Status: pre-1.0.** The API is implemented and exercised against four SMB1
+> servers. It stays below 1.0 until a real consumer has exercised it, and Cargo
+> treats every `0.x` minor as incompatible — so a breaking change arrives as a
+> minor bump, and the resolver is what protects a dependency rather than review.
 
 ## Security — read this before pointing it at anything
 
@@ -36,6 +37,11 @@ reach carries a fuzz target, and allocation from untrusted input is bounded
 wherever it happens.
 
 ## Usage
+
+```toml
+[dependencies]
+smb1client = "0.1"
+```
 
 A caller reaches a file through `Client` → `Tree` → `File`, and that is the
 whole opening sequence. `examples/` carries a progression, smallest first, and
