@@ -89,11 +89,7 @@ impl TreeConnectAndxRequest {
     pub fn decode(message: &Message) -> Result<Self, WireError> {
         message.expect_words(command::TREE_CONNECT_ANDX, &[REQUEST_WORDS], "4")?;
         let words: RequestWords = read_words(message.words())?;
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
 
         let password_length = usize::from(words.password_length);
         let (password, rest) =
@@ -147,11 +143,7 @@ impl TreeConnectAndxResponse {
         // there.
         words.andx.refuse_chaining()?;
 
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
         let service_end = area
             .iter()
             .position(|&byte| byte == 0)

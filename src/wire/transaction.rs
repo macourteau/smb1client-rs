@@ -392,7 +392,7 @@ impl TransactionRequest {
                 .min()
                 .map_or(0, usize::from);
             if first > message.byte_area_offset() {
-                let area = message.byte_area();
+                let area = message.byte_area_to_end();
                 let end = first - message.byte_area_offset();
                 let raw = area.get(..end).ok_or(WireError::Truncated {
                     part: "transaction Name",

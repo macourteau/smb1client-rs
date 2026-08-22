@@ -316,17 +316,24 @@ impl Message {
         self.byte_count
     }
 
-    /// The byte area's length, bounded by what the frame actually holds.
+    /// The byte area, checked against what the frame actually holds.
     ///
-    /// **Not `byte_count()`.** That field is 16 bits and wraps, and the rule
-    /// this module opens with is that it is never used as a length. No command
-    /// decoded here can carry a byte area past 64 KiB, so no wrap is reachable
-    /// today — but the next command added would inherit the pattern, and the
-    /// frame length is the bound that cannot lie. Taking the smaller of the two
-    /// means a wrapped count truncates rather than reading past the message.
-    pub fn byte_area_len(&self) -> usize {
-        let remaining = self.bytes.len().saturating_sub(self.byte_area_offset());
-        usize::from(self.byte_count).min(remaining)
+    /// **Not `byte_count()` taken as a length.** That field is 16 bits and it
+    /// wraps; the rule this module opens with is that it is read to be reported
+    /// and never trusted as a size. So the declared count is checked here
+    /// against the message's own length, and a count claiming more than the
+    /// message carries is an error rather than a read past the end — and rather
+    /// than a silent truncation, which is the failure this crate exists not to
+    /// reproduce. A wrapped count is the other direction: it *under*-states, no
+    /// bound can recover it, and no command decoded here can carry a byte area
+    /// past 64 KiB, so none is reachable. One place carries the rule because
+    /// six decoders need it.
+    pub fn byte_area(&self) -> Result<&[u8], WireError> {
+        self.block(
+            "ByteCount",
+            self.byte_area_offset(),
+            usize::from(self.byte_count),
+        )
     }
 
     /// Where the byte area begins, measured from the start of the SMB message.
@@ -334,11 +341,13 @@ impl Message {
         HEADER_LEN + 1 + usize::from(self.word_count) * 2 + 2
     }
 
-    /// The byte area, bounded by the message rather than by `ByteCount`.
-    // Read by the per-command decoders, which arrive with the layers that issue
-    // those commands.
-    #[allow(dead_code)]
-    pub fn byte_area(&self) -> &[u8] {
+    /// Everything from the byte area's start to the end of the message,
+    /// bounded by the message rather than by `ByteCount`.
+    ///
+    /// For the decoders that locate their sub-blocks by an offset measured from
+    /// the header — the transactions — where `ByteCount` is not the bound that
+    /// matters. Everything else wants [`byte_area`](Self::byte_area).
+    pub fn byte_area_to_end(&self) -> &[u8] {
         &self.bytes[self.byte_area_offset()..]
     }
 

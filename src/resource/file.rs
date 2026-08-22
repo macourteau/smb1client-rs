@@ -428,7 +428,6 @@ struct Chunk<'a> {
 /// Written by hand rather than reached for from a combinator crate: the depth is
 /// four, so polling each in turn costs nothing, and a `Stream` or a `FuturesUnordered`
 /// would put a pre-1.0 dependency in the crate for it.
-/// Polls the outstanding chunks and returns the first that answers.
 ///
 /// It stops at the first `Poll::Ready`, leaving higher-index futures unpolled —
 /// and a chunk's request is not sent until its future is first polled, so that

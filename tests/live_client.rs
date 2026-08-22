@@ -20,6 +20,9 @@ use std::time::Duration;
 use smb1client::connection::Request;
 use smb1client::{Client, ClientConfig, Credentials, NtStatus, Server, Session, SessionOptions};
 
+#[path = "live_lock/mod.rs"]
+mod live_lock;
+
 /// `SMB_COM_ECHO`.
 const ECHO: u8 = 0x2B;
 
@@ -61,6 +64,7 @@ fn config(target: &Target) -> ClientConfig {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_server_answers_the_probe_and_keeps_the_session() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;
@@ -118,6 +122,7 @@ async fn a_live_server_answers_the_probe_and_keeps_the_session() {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_client_caches_its_connection_and_its_tree() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;
@@ -179,6 +184,7 @@ async fn a_live_client_caches_its_connection_and_its_tree() {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_idle_connection_is_probed_and_reused() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;

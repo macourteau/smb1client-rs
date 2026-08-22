@@ -753,7 +753,11 @@ fn the_name_alignment_sites_land_their_names_on_even_offsets() {
 
     let create = parse("capture/0015-c2s-cmda2.bin");
     assert_eq!(create.byte_area_offset(), 83);
-    assert_eq!(create.byte_area()[0], 0, "the pad byte before the name");
+    assert_eq!(
+        create.byte_area_to_end()[0],
+        0,
+        "the pad byte before the name"
+    );
     let create = NtCreateAndxRequest::decode(&create).unwrap();
     assert_eq!(create.name, "alpha.txt");
     // The reference's values, both of which this crate departs from.
@@ -848,8 +852,12 @@ fn the_two_spellings_of_a_transaction_name_differ_only_in_the_name() {
     assert_eq!(frame_answered.byte_area_offset(), 67);
     assert_eq!(frame_refused.byte_count(), 33);
     assert_eq!(frame_answered.byte_count(), 47);
-    assert_eq!(frame_answered.byte_area()[0], 0, "the pad before the name");
-    assert_eq!(&frame_answered.byte_area()[1..3], [0x5C, 0x00]);
+    assert_eq!(
+        frame_answered.byte_area_to_end()[0],
+        0,
+        "the pad before the name"
+    );
+    assert_eq!(&frame_answered.byte_area_to_end()[1..3], [0x5C, 0x00]);
     let words = frame_answered.words();
     assert_eq!(u16::from_le_bytes([words[20], words[21]]), 94);
     assert_eq!(u16::from_le_bytes([words[24], words[25]]), 114);

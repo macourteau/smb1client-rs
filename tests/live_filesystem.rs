@@ -20,6 +20,9 @@ use std::time::Duration;
 
 use smb1client::{Credentials, Session, SessionOptions, Tree};
 
+#[path = "live_lock/mod.rs"]
+mod live_lock;
+
 /// Where to write, under the share root. Everything this suite creates lives
 /// here and is removed at the end.
 const SCRATCH: &str = "smb1client-rs-live";
@@ -95,6 +98,7 @@ async fn connect_advertising(target: &Target, advertised: u16) -> Tree {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_share_lists_and_stats() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;
@@ -146,6 +150,7 @@ async fn a_live_share_lists_and_stats() {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_dropped_listing_closes_its_search_on_a_live_server() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else { return };
     let tree = connect(&target).await;
 
@@ -183,6 +188,7 @@ async fn a_dropped_listing_closes_its_search_on_a_live_server() {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_server_takes_the_whole_write_path() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else { return };
     if !target.writable {
         eprintln!("SMB1_TEST_READ_ONLY is set; the write path is skipped");
@@ -310,6 +316,7 @@ async fn a_live_server_takes_the_whole_write_path() {
 #[tokio::test]
 #[ignore = "needs the seeded acceptance container; set SMB1_TEST_SEEDED_DIR"]
 async fn the_seeded_directory_lists_every_entry() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else { return };
     let Ok(seeded) = std::env::var("SMB1_TEST_SEEDED_DIR") else {
         eprintln!("SMB1_TEST_SEEDED_DIR is unset; the seeded check is skipped");
@@ -364,6 +371,7 @@ async fn the_seeded_directory_lists_every_entry() {
 #[tokio::test]
 #[ignore = "needs the seeded acceptance container; set SMB1_TEST_SEEDED_DIR"]
 async fn a_small_advertised_buffer_reaches_the_reassembly_path() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else { return };
     let Ok(seeded) = std::env::var("SMB1_TEST_SEEDED_DIR") else {
         eprintln!("SMB1_TEST_SEEDED_DIR is unset; the reassembly check is skipped");
@@ -418,22 +426,36 @@ async fn a_small_advertised_buffer_reaches_the_reassembly_path() {
 /// this test was written believing. If a server ever starts refusing the delete
 /// properly, this still passes — the verdict is the same either way.
 ///
-/// Writes, so it does not run against a device holding real data.
+/// **It writes**, so `SMB1_TEST_READ_ONLY` skips it and it creates only under
+/// the same scratch directory as the write path above. Both are load-bearing:
+/// the documented way to point this suite at a device holding somebody's data
+/// is that variable, and a test that writes at the share root regardless would
+/// make the documented procedure unsafe.
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn removing_a_non_empty_directory_is_refused_rather_than_silently_ignored() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some(target) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;
     };
+    if !target.writable {
+        eprintln!("SMB1_TEST_READ_ONLY is set; the non-empty delete is skipped");
+        return;
+    }
     let tree = connect(&target).await;
 
-    tree.create_dir("live_non_empty").await.ok();
-    tree.write("live_non_empty\\child.txt", b"x")
+    // A previous run that failed part-way leaves this behind.
+    let _ = tree.remove_dir_all(SCRATCH).await;
+    tree.create_dir(SCRATCH).await.expect("the scratch is made");
+    let parent = format!("{SCRATCH}\\non-empty");
+    let child = format!("{parent}\\child.txt");
+    tree.create_dir(&parent).await.expect("the parent is made");
+    tree.write(&child, b"x")
         .await
         .expect("the child is written");
 
-    let verdict = tree.remove_dir("live_non_empty").await;
+    let verdict = tree.remove_dir(&parent).await;
     let error = verdict.expect_err("a non-empty directory is not deletable");
     assert_eq!(
         error.kind(),
@@ -441,17 +463,20 @@ async fn removing_a_non_empty_directory_is_refused_rather_than_silently_ignored(
         "reported as {error}"
     );
     assert!(
-        tree.exists("live_non_empty\\child.txt").await.unwrap(),
+        tree.exists(&child).await.unwrap(),
         "the child survived, which is what makes the refusal correct"
     );
 
-    tree.remove_file("live_non_empty\\child.txt")
+    tree.remove_file(&child)
         .await
         .expect("the child is removed");
-    tree.remove_dir("live_non_empty")
+    tree.remove_dir(&parent)
         .await
         .expect("now empty, it deletes");
-    assert!(!tree.exists("live_non_empty").await.unwrap());
+    assert!(!tree.exists(&parent).await.unwrap());
 
+    tree.remove_dir_all(SCRATCH)
+        .await
+        .expect("the scratch is removed");
     tree.close().await.expect("the tree disconnected");
 }

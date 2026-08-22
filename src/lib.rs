@@ -142,7 +142,11 @@ pub mod fuzz {
         let message = crate::wire::Message::parse(body.to_vec())?;
         // Reading the parts is the point: a parser that only validates lengths
         // proves less than one whose accessors are exercised too.
-        let _ = (message.words(), message.byte_area(), message.byte_count());
+        let _ = (
+            message.words(),
+            message.byte_area_to_end(),
+            message.byte_count(),
+        );
         Ok(())
     }
 

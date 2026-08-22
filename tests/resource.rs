@@ -17,9 +17,10 @@ use smb1client::connection::Timeouts;
 use smb1client::{Error, File, NtStatus, Tree};
 
 use harness::{
-    CLOSE, FIND_CLOSE2, NT_CREATE_ANDX, Peer, READ_ANDX, TRANSACTION2, bodyless, chain, command_of,
-    create_request, find_first_parameters, find_next_parameters, large_io, mid_of, read_request,
-    read_response, small_io, trans2_parameters, trans2_subcommand, transaction_response, tree,
+    CLOSE, FIND_CLOSE2, NT_CREATE_ANDX, Peer, READ_ANDX, TRANSACTION2, WRITE_ANDX, bodyless, chain,
+    command_of, create_request, find_first_parameters, find_next_parameters, large_io, mid_of,
+    read_request, read_response, small_io, trans2_parameters, trans2_subcommand,
+    transaction_response, tree, write_request, write_response,
 };
 
 /// The chunk a large-I/O server buys.
@@ -890,5 +891,114 @@ async fn a_dropped_file_enqueues_its_close() {
             .map(|frame| command_of(frame))
             .collect::<Vec<_>>(),
         vec![CLOSE]
+    );
+}
+
+/// **The write half of the same one-shot downgrade.**
+///
+/// The read half above is not evidence for this one. The fix for the refused
+/// chunk landed in both loops and the test in only one, which is how the
+/// original defect survived a review in the first place: two copies of the same
+/// control flow, one of them unpinned. Reverting the re-clamp here alone leaves
+/// the whole rest of the suite green.
+///
+/// No server this crate has been run against can produce this exchange — Samba
+/// serves the large chunk and Windows answers short, which is not a refusal —
+/// so a scripted peer is the only proof this path will ever have.
+#[tokio::test]
+async fn a_refused_write_downgrades_the_connection_once_and_retries_it() {
+    let negotiated = large_io();
+    let (tree, mut peer) = tree(negotiated, Timeouts::default());
+    let downgraded = (negotiated.max_buffer_size - 1_024) as usize;
+    let file = open(&tree, &mut peer, 0).await;
+
+    // Larger than the downgraded chunk, for the reason the read half gives: at
+    // or below it, a retry that re-clamps and a retry that re-sends the refused
+    // size are the same frame.
+    let writing = tokio::spawn(async move { file.write_all_at(&vec![0xA7; CHUNK], 0, None).await });
+
+    let first = peer.frame().await;
+    assert_eq!(
+        write_request(&first).1,
+        CHUNK as u32,
+        "the first offer is the large chunk the capabilities allow"
+    );
+    peer.send(&bodyless(
+        WRITE_ANDX,
+        NtStatus::INVALID_PARAMETER,
+        mid_of(&first),
+    ))
+    .await;
+
+    let retry = peer.frame().await;
+    assert_eq!(
+        write_request(&retry).1,
+        downgraded as u32,
+        "the retry offers MaxBufferSize - 1024, not the size just refused"
+    );
+    peer.send(&write_response(mid_of(&retry), downgraded as u32))
+        .await;
+
+    // The rest of the span, in as many rounds as the downgraded size takes. The
+    // property rather than the arithmetic: nothing after the downgrade exceeds
+    // it.
+    let mut covered = downgraded;
+    while covered < CHUNK {
+        let more = peer.frame().await;
+        let (_, length) = write_request(&more);
+        assert!(
+            length as usize <= downgraded,
+            "a write after the downgrade offered {length}, above the {downgraded} it is bounded by"
+        );
+        peer.send(&write_response(mid_of(&more), length)).await;
+        covered += length as usize;
+    }
+
+    writing.await.unwrap().expect("the write completed");
+}
+
+/// **A writer handed back carries the length its last flush earned.**
+///
+/// `into_inner()` takes a different path out of the adapter than `poll_flush`
+/// does, and the length a completed flush earns is applied in one place that
+/// both paths reach. They did not always: the accounting was written twice, the
+/// `into_inner()` copy never applied it, and the ordinary
+/// `into_writer()` → `write_all()` → `into_inner()` sequence handed back a file
+/// reporting a length of zero for bytes the server had acknowledged.
+///
+/// The span is a whole number of buffer-fulls on purpose. That leaves the last
+/// flush *in flight* when `into_inner()` is called, which is the case the two
+/// paths disagreed about; a partial buffer takes the other branch and passes
+/// either way.
+#[tokio::test]
+async fn a_writer_handed_back_carries_the_length_its_last_flush_earned() {
+    use tokio::io::AsyncWriteExt;
+
+    // Eight chunks is a whole number of buffer-fulls at any pipeline depth that
+    // divides it, which every depth this crate uses does.
+    const SPAN: usize = CHUNK * 8;
+
+    let (tree, mut peer) = tree(large_io(), Timeouts::default());
+    let file = open(&tree, &mut peer, 0).await;
+
+    let writing = tokio::spawn(async move {
+        let mut writer = file.into_writer(None)?;
+        writer.write_all(&vec![0x5A; SPAN]).await?;
+        let file = writer.into_inner().await?;
+        Ok::<u64, Error>(file.len())
+    });
+
+    let mut acknowledged = 0;
+    while acknowledged < SPAN {
+        let frame = peer.frame().await;
+        let (_, length) = write_request(&frame);
+        peer.send(&write_response(mid_of(&frame), length)).await;
+        acknowledged += length as usize;
+    }
+
+    assert_eq!(
+        writing.await.unwrap().expect("the writer was handed back"),
+        SPAN as u64,
+        "the length counts what the last flush wrote, not what the one before it did"
     );
 }

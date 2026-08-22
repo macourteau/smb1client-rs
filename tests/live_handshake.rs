@@ -14,6 +14,9 @@ use std::time::Duration;
 
 use smb1client::{Credentials, Session, SessionOptions};
 
+#[path = "live_lock/mod.rs"]
+mod live_lock;
+
 fn target() -> Option<(String, Credentials, bool)> {
     let server = std::env::var("SMB1_TEST_SERVER").ok()?;
     let user = std::env::var("SMB1_TEST_USER").unwrap_or_default();
@@ -39,6 +42,7 @@ fn target() -> Option<(String, Credentials, bool)> {
 #[tokio::test]
 #[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
 async fn a_live_server_authenticates() {
+    let _dial = live_lock::one_at_a_time().await;
     let Some((server, credentials, allow_guest)) = target() else {
         eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
         return;

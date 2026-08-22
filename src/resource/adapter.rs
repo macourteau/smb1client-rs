@@ -221,6 +221,19 @@ impl FileWriter {
         Ok(self.file)
     }
 
+    /// Applies what a finished flush earned: the length it wrote, and only if
+    /// it wrote it.
+    ///
+    /// Both flush paths come through here. The accounting was written twice
+    /// once, and only one copy was right — an `into_inner()` after a buffered
+    /// write reported a length of zero for bytes the server had acknowledged,
+    /// because the path it takes never applied the pending length at all.
+    fn settle(&mut self, outcome: &Result<()>) {
+        if let (Ok(()), Some(length)) = (outcome, self.pending_length.take()) {
+            self.file.grew_to(length);
+        }
+    }
+
     /// Writes whatever is buffered.
     async fn flush_buffered(&mut self) -> Result<()> {
         if let Some(mut flushing) = self.flushing.take() {
@@ -228,6 +241,7 @@ impl FileWriter {
                 std::future::poll_fn(|context| flushing.as_mut().poll(context)).await;
             self.buffer = buffer;
             self.buffer.clear();
+            self.settle(&outcome);
             outcome?;
         }
         if self.buffer.is_empty() {
@@ -240,7 +254,8 @@ impl FileWriter {
             .write_span(&span, at, self.depth, &self.progress)
             .await;
         self.cursor += span.len() as u64;
-        self.file.grew_to(self.cursor);
+        self.pending_length = Some(self.cursor);
+        self.settle(&outcome);
         self.buffer = span;
         self.buffer.clear();
         outcome
@@ -281,9 +296,7 @@ impl FileWriter {
         self.flushing = None;
         self.buffer = buffer;
         self.buffer.clear();
-        if let (Ok(()), Some(length)) = (&outcome, self.pending_length.take()) {
-            self.file.grew_to(length);
-        }
+        self.settle(&outcome);
         Poll::Ready(outcome.map_err(io::Error::from))
     }
 }

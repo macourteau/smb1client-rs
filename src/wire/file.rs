@@ -143,11 +143,7 @@ impl NtCreateAndxRequest {
     pub fn decode(message: &Message) -> Result<Self, WireError> {
         message.expect_words(command::NT_CREATE_ANDX, &[CREATE_REQUEST_WORDS], "24")?;
         let words: CreateRequestWords = read_words(message.words())?;
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
         let name = area
             .get(1..1 + usize::from(words.name_length))
             .ok_or(WireError::Truncated {
@@ -341,11 +337,7 @@ impl RenameRequest {
     pub fn decode(message: &Message) -> Result<Self, WireError> {
         message.expect_words(command::RENAME, &[RENAME_REQUEST_WORDS], "1")?;
         let words: RenameRequestWords = read_words(message.words())?;
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
 
         let old = utf16_field("OldFileName", area, 1)?;
         let mut second = 1 + old.1 + 2;

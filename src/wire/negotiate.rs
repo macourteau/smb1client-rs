@@ -67,11 +67,7 @@ impl NegotiateRequest {
                 actual: message.header().command,
             });
         }
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
         let mut dialects = Vec::new();
         let mut rest = area;
         while let Some((&marker, tail)) = rest.split_first() {
@@ -154,11 +150,7 @@ impl NegotiateResponse {
         message.expect_words(command::NEGOTIATE, &[RESPONSE_WORDS], "17")?;
         let words: NegotiateWords = read_words(message.words())?;
 
-        let area = message.block(
-            "ByteCount",
-            message.byte_area_offset(),
-            message.byte_area_len(),
-        )?;
+        let area = message.byte_area()?;
         let (guid, blob) = area.split_at_checked(16).ok_or(WireError::Truncated {
             part: "ServerGUID",
             declared: 16,
