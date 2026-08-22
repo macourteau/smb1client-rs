@@ -313,6 +313,13 @@ impl SharePath {
         &self.0
     }
 
+    /// Consumes the path and yields the normalized string that goes on the
+    /// wire. Offered beside [`SharePath::as_str`] so a caller building a
+    /// request does not clone what it is about to own.
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
     /// Whether this is the share root, which is the empty path.
     ///
     /// A listing distinguishes the two: the pattern for a path inside the share

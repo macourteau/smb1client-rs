@@ -33,6 +33,7 @@ use crate::path;
 use crate::resource::{DEFAULT_READ_AHEAD, File, ReadDir};
 use crate::session::Session;
 use crate::status::NtStatus;
+use crate::unc::SharePath;
 use crate::wire::header::command;
 use crate::wire::info;
 use crate::wire::transaction::TransactionRequest;
@@ -281,7 +282,7 @@ impl Tree {
 
     /// Opens a file, on whatever terms the options ask for.
     pub async fn open_with(&self, path: &str, options: &OpenOptions) -> Result<File> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         let opened = self.create_andx(&options.request(&path)).await?;
         Ok(File::new(
             self.inner.clone(),
@@ -297,7 +298,7 @@ impl Tree {
     /// `FILE_CREATE` with `FILE_DIRECTORY_FILE`, then a close — and not
     /// `SMB_COM_CREATE_DIRECTORY`.
     pub async fn create_dir(&self, path: &str) -> Result<()> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         let opened = self
             .create_andx(&wire_file::NtCreateAndxRequest {
                 flags: 0,
@@ -340,7 +341,7 @@ impl Tree {
     /// one leaves the tree it was given and deletes whatever is on the other
     /// side.
     pub async fn remove_dir_all(&self, path: &str) -> Result<()> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         self.remove_level(&path).await
     }
 
@@ -379,8 +380,8 @@ impl Tree {
         // share-relative form: each name goes out with a leading backslash,
         // matching the reference. Both are refused by the same three checks
         // first.
-        let from = with_leading_backslash(&path::share_relative(from)?);
-        let to = with_leading_backslash(&path::share_relative(to)?);
+        let from = with_leading_backslash(&SharePath::new(from)?.into_string());
+        let to = with_leading_backslash(&SharePath::new(to)?.into_string());
         let request = wire_file::RenameRequest {
             search_attributes: crate::wire::find::SEARCH_ATTRIBUTES,
             old_name: from,
@@ -400,7 +401,7 @@ impl Tree {
     /// Starts a listing and returns the iterator, which owns the server-side
     /// search from there on.
     pub async fn read_dir(&self, path: &str) -> Result<ReadDir> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         ReadDir::start(self.inner.clone(), &path::search_pattern(&path)).await
     }
 
@@ -410,7 +411,7 @@ impl Tree {
     /// timestamps and the attributes, then the standard level for the size and
     /// the allocation size, neither carrying both.
     pub async fn metadata(&self, path: &str) -> Result<Metadata> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         let basic = self
             .query_path(&path, info::query_level::BASIC_INFO)
             .await?;
@@ -598,7 +599,7 @@ impl Tree {
     /// The delete path: open with `DELETE` under `FILE_DELETE_ON_CLOSE`, then
     /// close.
     async fn delete(&self, path: &str, kind: u32) -> Result<()> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         let opened = self
             .create_andx(&wire_file::NtCreateAndxRequest {
                 flags: 0,
@@ -631,7 +632,7 @@ impl Tree {
     }
 
     async fn set_path(&self, path: &str, block: info::BasicInfo) -> Result<()> {
-        let path = path::share_relative(path)?;
+        let path = SharePath::new(path)?.into_string();
         let request = TransactionRequest::trans2(
             info::SUBCOMMAND_SET_PATH_INFORMATION,
             info::set_path_parameters(info::set_level::BASIC_INFO, &path),

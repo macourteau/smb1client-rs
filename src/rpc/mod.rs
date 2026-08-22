@@ -177,7 +177,7 @@ impl Ipc {
 
     /// Enumerates the server's shares.
     ///
-    /// Takes a [`Server`] rather than a string so that the `ServerName` the
+    /// Takes a [`crate::unc::Server`] rather than a string so that the `ServerName` the
     /// `srvsvc` request carries is built from the host alone, through the one
     /// construction path every wire UNC goes through. That is not fastidiousness:
     /// the reference library leaks the dial port into exactly three places and
