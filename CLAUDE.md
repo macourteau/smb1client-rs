@@ -28,7 +28,7 @@ Two of its rules are easy to violate by accident:
 
 - **Correctness outranks fidelity to the Go original.** Where that library is
   known-good it is the reference implementation and the differential oracle. It
-  is not everywhere: the design record enumerates sixteen behaviours where the
+  is not everywhere: the design record enumerates twenty-two behaviours where the
   Go library is wrong, and for each the test suite asserts the correct result
   instead of reproducing it.
 - **Idiomatic Rust outranks faithful translation.** This crate is maintained by

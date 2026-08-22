@@ -403,3 +403,55 @@ async fn a_small_advertised_buffer_reaches_the_reassembly_path() {
 
     tree.close().await.expect("the tree disconnected");
 }
+
+/// **A non-empty directory is not silently left alone.**
+///
+/// Deleting is an open carrying `FILE_DELETE_ON_CLOSE` and a close, and against
+/// a non-empty directory every server this crate has been run against — both
+/// Samba families and Windows 11 24H2 — answers *both* requests
+/// `STATUS_SUCCESS` and then does not unlink. Nothing on the wire says so, so a
+/// client trusting the statuses reports success and deletes nothing, which is
+/// the silent-no-op class this crate exists not to reproduce.
+///
+/// This is a live test rather than an offline one on purpose: what it pins is
+/// the *servers'* behaviour, and a scripted peer would only ever replay what
+/// this test was written believing. If a server ever starts refusing the delete
+/// properly, this still passes — the verdict is the same either way.
+///
+/// Writes, so it does not run against a device holding real data.
+#[tokio::test]
+#[ignore = "needs a live SMB1 server; set SMB1_TEST_SERVER"]
+async fn removing_a_non_empty_directory_is_refused_rather_than_silently_ignored() {
+    let Some(target) = target() else {
+        eprintln!("SMB1_TEST_SERVER is unset; nothing to talk to");
+        return;
+    };
+    let tree = connect(&target).await;
+
+    tree.create_dir("live_non_empty").await.ok();
+    tree.write("live_non_empty\\child.txt", b"x")
+        .await
+        .expect("the child is written");
+
+    let verdict = tree.remove_dir("live_non_empty").await;
+    let error = verdict.expect_err("a non-empty directory is not deletable");
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::DirectoryNotEmpty,
+        "reported as {error}"
+    );
+    assert!(
+        tree.exists("live_non_empty\\child.txt").await.unwrap(),
+        "the child survived, which is what makes the refusal correct"
+    );
+
+    tree.remove_file("live_non_empty\\child.txt")
+        .await
+        .expect("the child is removed");
+    tree.remove_dir("live_non_empty")
+        .await
+        .expect("now empty, it deletes");
+    assert!(!tree.exists("live_non_empty").await.unwrap());
+
+    tree.close().await.expect("the tree disconnected");
+}

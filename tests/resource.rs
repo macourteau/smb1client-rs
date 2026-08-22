@@ -612,6 +612,12 @@ async fn deleting_is_an_open_under_delete_on_close_and_then_a_close() {
         let closed = peer.answer_close().await;
         // `LastWriteTime = 0` tells the server to leave the time it has alone.
         assert_eq!(closed[35..39], [0, 0, 0, 0]);
+        if directory {
+            // A directory delete is checked afterwards: every tested server
+            // answers a delete-on-close against a non-empty directory with
+            // success and then does not unlink, so the statuses cannot say.
+            peer.answer_gone().await;
+        }
         removing.await.unwrap().expect("the delete succeeded");
     }
 }
@@ -638,13 +644,15 @@ async fn remove_dir_all_drains_a_level_before_it_deletes_from_it() {
     .await;
 
     // The child, then the directory itself: two opens and two closes, and no
-    // FIND_CLOSE2 between them.
+    // FIND_CLOSE2 between them — then the query that confirms the directory
+    // really went, which a delete-on-close cannot say for itself.
     let mut sent = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         let frame = peer
             .answer(|frame, mid| match command_of(frame) {
                 NT_CREATE_ANDX => harness::create_response(mid, 0x30, 0, false),
                 CLOSE => bodyless(CLOSE, NtStatus::SUCCESS, mid),
+                TRANSACTION2 => bodyless(TRANSACTION2, NtStatus::OBJECT_NAME_NOT_FOUND, mid),
                 other => panic!("unexpected command {other:#04x}"),
             })
             .await;
@@ -656,7 +664,7 @@ async fn remove_dir_all_drains_a_level_before_it_deletes_from_it() {
         sent.iter()
             .map(|frame| command_of(frame))
             .collect::<Vec<_>>(),
-        vec![NT_CREATE_ANDX, CLOSE, NT_CREATE_ANDX, CLOSE]
+        vec![NT_CREATE_ANDX, CLOSE, NT_CREATE_ANDX, CLOSE, TRANSACTION2]
     );
     assert_eq!(harness::create_name(&sent[0]), "dir\\a.txt");
     assert_eq!(harness::create_name(&sent[2]), "dir");

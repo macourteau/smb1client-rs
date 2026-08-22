@@ -356,8 +356,32 @@ impl Tree {
     }
 
     /// Deletes an empty directory.
+    ///
+    /// **Costs one round trip more than the delete itself, and the reason is a
+    /// measurement rather than caution.** Deleting is an open carrying
+    /// `FILE_DELETE_ON_CLOSE` and a close, and against a *non-empty* directory
+    /// every server this crate has been run against — both Samba families and
+    /// Windows 11 24H2 — answers both requests `STATUS_SUCCESS` and then simply
+    /// does not unlink. Nothing on the wire says so, so a client that trusts
+    /// the statuses reports success and deletes nothing.
+    ///
+    /// `std::fs::remove_dir` fails on a non-empty directory, and this method
+    /// takes its name; a silent no-op is the defect class this crate's guiding
+    /// principle exists to catch, and the same principle already translates one
+    /// at [`Tree::set_attributes`]. So the path is checked afterwards, and a
+    /// directory that survived its own deletion is reported as
+    /// [`Error::Status`] carrying `STATUS_DIRECTORY_NOT_EMPTY` — the status a
+    /// server would have sent had it refused, which maps to
+    /// [`std::io::ErrorKind::DirectoryNotEmpty`].
     pub async fn remove_dir(&self, path: &str) -> Result<()> {
-        self.delete(path, FILE_DIRECTORY_FILE).await
+        self.delete(path, FILE_DIRECTORY_FILE).await?;
+        // Not `exists`: a failure to answer here must not read as a successful
+        // delete, and `exists` folds "not found" into a bool.
+        match self.metadata(path).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+            Ok(_) => Err(Error::Status(NtStatus::DIRECTORY_NOT_EMPTY)),
+        }
     }
 
     /// Deletes a directory and everything under it.

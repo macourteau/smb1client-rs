@@ -364,6 +364,21 @@ impl Peer {
         .await
     }
 
+    /// Answers the `TRANS2_QUERY_PATH_INFORMATION` that `remove_dir` sends
+    /// after its close, with the not-found status a deleted directory earns.
+    ///
+    /// That query exists because every server tested answers a delete-on-close
+    /// against a *non-empty* directory with `STATUS_SUCCESS` twice over and
+    /// then does not unlink, so the statuses alone cannot say whether anything
+    /// happened.
+    pub async fn answer_gone(&mut self) -> Vec<u8> {
+        self.answer(|frame, mid| {
+            assert_eq!(command_of(frame), TRANSACTION2);
+            bodyless(TRANSACTION2, NtStatus::OBJECT_NAME_NOT_FOUND, mid)
+        })
+        .await
+    }
+
     /// Drops the far side, which is what a connection dying looks like.
     pub fn hang_up(self) {
         drop(self);
@@ -377,8 +392,13 @@ pub fn tree(negotiated: Negotiated, timeouts: Timeouts) -> (Tree, Peer) {
     (Tree::attach(connection, 7, 3), Peer { stream: server })
 }
 
-/// A server with both large-I/O capabilities and a 64 KiB message buffer, which
-/// is what the container advertises.
+/// A server with both large-I/O capabilities and a 65,535-byte message buffer.
+///
+/// **Not what the container advertises**, which is 16,644 — an earlier comment
+/// here said it was, and the difference is exactly the thing the chunk-size
+/// rule turns on. A buffer this large makes the capability case and the
+/// buffer-bounded case produce the same number, so a test that needs to tell
+/// them apart wants a smaller one.
 pub fn large_io() -> Negotiated {
     Negotiated {
         max_mpx_count: 50,
