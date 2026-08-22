@@ -211,7 +211,12 @@ impl Session {
         .await
         .map_err(|_| Error::ConnectTimeout)??;
 
-        let connection = transport::spawn(stream, handshake.negotiated, options.timeouts);
+        let connection = transport::spawn(
+            stream,
+            handshake.negotiated,
+            options.timeouts,
+            options.dump_wire_bytes,
+        );
         Ok(Self {
             connection,
             uid: handshake.uid,

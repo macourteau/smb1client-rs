@@ -29,6 +29,7 @@ use crate::status::NtStatus;
 use crate::wire::andx;
 use crate::wire::header::{SmbHeader, command};
 use crate::wire::netbios::{self, MessageType};
+use crate::wire::trace::{self, Direction};
 use crate::wire::{self, Message};
 
 use super::reassembly::Assembly;
@@ -215,11 +216,22 @@ pub(crate) struct Actor<S> {
     silent_for: Duration,
     waiting_since: Option<Instant>,
     consecutive_closes: usize,
+    /// Whether the tracer writes frame bytes for this run. The handshake traces
+    /// its own two messages before the actor exists; from here every frame in
+    /// either direction goes through the tracer, which is what makes the
+    /// `SESSION_SETUP_ANDX` redaction a property of the crate rather than of
+    /// one call site.
+    dump_bytes: bool,
 }
 
 /// Puts a connection actor on an already-negotiated, already-authenticated
 /// stream.
-pub(crate) fn spawn<S>(stream: S, negotiated: Negotiated, timeouts: Timeouts) -> Connection
+pub(crate) fn spawn<S>(
+    stream: S,
+    negotiated: Negotiated,
+    timeouts: Timeouts,
+    dump_bytes: bool,
+) -> Connection
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -244,6 +256,7 @@ where
         silent_for: Duration::ZERO,
         waiting_since: None,
         consecutive_closes: 0,
+        dump_bytes,
     };
     tokio::spawn(actor.run());
 
@@ -360,22 +373,26 @@ where
             uid: request.uid,
             ..SmbHeader::request(request.command)
         };
-        let frame =
-            match wire::message(&header, &request.body).and_then(|whole| wire::frame(&whole)) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    // Nothing reached the socket, so the multiplex id was never
-                    // used and the failure is this request's alone.
-                    let error = Error::from(error);
-                    if let Some(outcome) = &request.outcome {
-                        outcome.ended(Err(&error));
-                    }
-                    if let Some(reply) = reply {
-                        let _ = reply.send(Err(error));
-                    }
-                    return Ok(());
+        let framed = wire::message(&header, &request.body).and_then(|whole| {
+            let frame = wire::frame(&whole)?;
+            Ok((whole, frame))
+        });
+        let (whole, frame) = match framed {
+            Ok(built) => built,
+            Err(error) => {
+                // Nothing reached the socket, so the multiplex id was never
+                // used and the failure is this request's alone.
+                let error = Error::from(error);
+                if let Some(outcome) = &request.outcome {
+                    outcome.ended(Err(&error));
                 }
-            };
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(error));
+                }
+                return Ok(());
+            }
+        };
+        trace::frame(Direction::Outbound, &whole, self.dump_bytes);
 
         // What decides that a reply is reassembled is the command, so a
         // transaction built without its bounds fails loudly on the first reply
@@ -451,6 +468,7 @@ where
             }
             Inbound::Message(message) => message,
         };
+        trace::frame(Direction::Inbound, message.as_bytes(), self.dump_bytes);
 
         if let Some(next) = chained_command(&message) {
             return Err(Error::ChainedResponse(next));

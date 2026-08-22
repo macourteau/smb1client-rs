@@ -112,6 +112,14 @@ pub(crate) struct TreeInner {
     /// Whether the tree connection has already been released, so that an
     /// awaited `close()` and the `Drop` behind it do not both send one.
     released: AtomicBool,
+    /// Whether the server has said this tree is gone.
+    ///
+    /// `STATUS_NETWORK_NAME_DELETED` is tree-scoped and nothing more: the
+    /// connection, the other trees on it, their handles and every in-flight
+    /// request are still good. Recording it here is what lets the connection
+    /// cache drop this tree alone and connect a fresh one on the next call,
+    /// without the caller's other handles being touched.
+    disconnected: AtomicBool,
 }
 
 impl TreeInner {
@@ -131,6 +139,24 @@ impl TreeInner {
         self.read_ahead.load(Ordering::Relaxed)
     }
 
+    /// What a status a server refused an operation on this tree with means, and
+    /// the one place a tree-scoped disconnect is recorded.
+    ///
+    /// Every refusal a verb on this tree meets goes through here, so that the
+    /// cache learns of a discarded tree whichever request met it.
+    pub(crate) fn refused(&self, status: NtStatus) -> Error {
+        if status == NtStatus::NETWORK_NAME_DELETED {
+            debug!(tid = self.tid, "the server discarded this tree connection");
+            self.disconnected.store(true, Ordering::Relaxed);
+        }
+        Error::refused(status)
+    }
+
+    /// Whether the server has said this tree is gone.
+    pub(crate) fn is_disconnected(&self) -> bool {
+        self.disconnected.load(Ordering::Relaxed)
+    }
+
     /// Issues one request on this tree.
     pub(crate) async fn request(&self, request: Request) -> Result<Reply> {
         Ok(self.connection().request(request).await?)
@@ -140,7 +166,7 @@ impl TreeInner {
     pub(crate) async fn checked(&self, request: Request) -> Result<Reply> {
         let reply = self.request(request).await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.refused(reply.status()));
         }
         Ok(reply)
     }
@@ -212,6 +238,7 @@ impl Tree {
                 tid,
                 read_ahead: AtomicUsize::new(DEFAULT_READ_AHEAD),
                 released: AtomicBool::new(false),
+                disconnected: AtomicBool::new(false),
             }),
         }
     }
@@ -226,6 +253,12 @@ impl Tree {
         self.inner
             .read_ahead
             .store(chunks.max(1), Ordering::Relaxed);
+    }
+
+    /// Whether the server has said this tree is gone, which is what the
+    /// connection cache reads before it hands a cached tree out again.
+    pub(crate) fn is_disconnected(&self) -> bool {
+        self.inner.is_disconnected()
     }
 
     /// The tree id the server assigned.
@@ -261,7 +294,7 @@ impl Tree {
             ))
             .await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(inner.refused(reply.status()));
         }
         Ok(())
     }
@@ -626,7 +659,7 @@ impl Tree {
         );
         let reply = transaction(&self.inner, request, "TRANS2_QUERY_PATH_INFORMATION").await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.inner.refused(reply.status()));
         }
         Ok(transaction_data(&reply))
     }
@@ -640,7 +673,7 @@ impl Tree {
         );
         let reply = transaction(&self.inner, request, "TRANS2_SET_PATH_INFORMATION").await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.inner.refused(reply.status()));
         }
         Ok(())
     }
@@ -653,7 +686,7 @@ impl Tree {
         );
         let reply = transaction(&self.inner, request, "TRANS2_QUERY_FS_INFORMATION").await?;
         if reply.status() != NtStatus::SUCCESS {
-            return Err(Error::refused(reply.status()));
+            return Err(self.inner.refused(reply.status()));
         }
         Ok(transaction_data(&reply))
     }

@@ -128,7 +128,6 @@ pub mod command {
     /// `SMB_COM_TREE_CONNECT_ANDX`.
     pub const TREE_CONNECT_ANDX: u8 = 0x75;
     /// `SMB_COM_ECHO`. Issued by the cache's liveness probe.
-    #[allow(dead_code)]
     pub const ECHO: u8 = 0x2B;
     /// `SMB_COM_NT_CREATE_ANDX`.
     pub const NT_CREATE_ANDX: u8 = 0xA2;

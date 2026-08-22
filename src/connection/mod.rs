@@ -481,6 +481,30 @@ impl Connection {
         }
     }
 
+    /// Whether the connection actor has ended.
+    ///
+    /// A connection whose actor has terminated — because the socket failed,
+    /// because the server discarded the session, or because any other failure
+    /// ended it — answers nothing ever again, so the cache evicts such an entry
+    /// and re-dials rather than handing it out (see `client`). It is not a
+    /// liveness probe: a socket dropped with no FIN leaves the actor alive and
+    /// this answers `false`, which is what the silence rule and the idle probe
+    /// are for.
+    pub fn is_closed(&self) -> bool {
+        self.requests.is_closed()
+    }
+
+    /// How many handles this connection has, this one included.
+    ///
+    /// What it answers is whether anything besides the caller still holds the
+    /// connection: a `Tree` holds one of these, and a `File` or a listing
+    /// iterator holds its `Tree`. The cache asks before it says goodbye, a
+    /// `LOGOFF_ANDX` sent while a caller still holds a handle being exactly the
+    /// invalidation the teardown rule forbids.
+    pub(crate) fn handles(&self) -> usize {
+        self.requests.strong_count()
+    }
+
     /// Issues one request and waits for its reply.
     ///
     /// The wait is bounded by the per-request timeout and the overall deadline.

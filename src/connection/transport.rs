@@ -31,6 +31,7 @@
 //!         capabilities: 0,
 //!     },
 //!     Timeouts::default(),
+//!     false,
 //! );
 //! # let _ = connection;
 //! # }
@@ -46,9 +47,19 @@ use super::{Connection, Negotiated, Timeouts};
 /// The actor runs as a spawned task, so this must be called from inside a tokio
 /// runtime. It ends when every handle on the connection has been dropped, or
 /// when the connection fails.
-pub fn spawn<S>(stream: S, negotiated: Negotiated, timeouts: Timeouts) -> Connection
+///
+/// `dump_bytes` is the operator's byte-level dump toggle for this run, off
+/// unless it was turned on deliberately: a dump of a listing or a read reply
+/// carries filenames and file contents. It does not reach `SESSION_SETUP_ANDX`,
+/// whose byte section the tracer redacts whatever this says.
+pub fn spawn<S>(
+    stream: S,
+    negotiated: Negotiated,
+    timeouts: Timeouts,
+    dump_bytes: bool,
+) -> Connection
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
-    super::actor::spawn(stream, negotiated, timeouts)
+    super::actor::spawn(stream, negotiated, timeouts, dump_bytes)
 }

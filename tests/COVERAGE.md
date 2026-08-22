@@ -282,3 +282,47 @@ are what CI asserts for `auth/`.
 **The live half is `tests/live_handshake.rs`, and it is `#[ignore]`d.** It reads
 `SMB1_TEST_SERVER` and authenticates, and nothing in CI points it at anything but
 the pinned container.
+
+## `client.rs` — the connection and tree caches
+
+The caching layer's rules are keying, single-flight dialling, three routes to a
+dead connection, the idle probe, the eviction sweep and the teardown. Three of
+those are timing properties — the probe at one overall deadline, eviction at
+twenty, and the goodbye being awaited rather than raced — so they reach the same
+virtual clock the invariants do. The seam is a dialer of the test's own, which
+replaces the stream and nothing else: every connection below runs the real
+handshake, the real actor and the real teardown.
+
+| Test | File | What it proves, and what a wrong implementation does |
+|---|---|---|
+| `two_ports_on_one_host_are_two_servers` | `tests/client.rs` | The key is host *and* port. A cache keyed on the host alone hands the second path the first path's connection — the exact shape of this campaign's acceptance container, a second SMB1 server on `127.0.0.1:10445` beside whatever answers on 445. |
+| `one_server_is_one_connection_however_it_is_spelled` | `tests/client.rs` | The key is `Server::cache_key`, whose host half is lowercased, and the share is no part of it. Keying on the `Server` value dials twice for one server written in two cases; keying on the path dials again for a second share. |
+| `one_share_asked_for_twice_is_one_tree_connect` | `tests/client.rs` | Trees are cached under the connection. Connecting afresh per call spends a round trip and a server-side handle each time. |
+| `the_host_goes_on_the_wire_as_the_caller_wrote_it` | `tests/client.rs` | The lowercasing belongs to the key alone. An implementation normalising at the front door sends a host the caller did not write — and on the `IPC$` path, a name the server may not recognise. |
+| `several_tasks_meeting_a_cold_cache_produce_one_dial` | `tests/client.rs` | Single-flight. Releasing the cache lock before the dial completes — the shape smb-rs carries a `// TODO: This is a bit racy` against — has every task that met the cold cache dial and authenticate one of its own. |
+| `a_dial_in_flight_runs_to_completion_when_its_last_waiter_drops` | `tests/client.rs` | The dial runs on a task of its own, so the last waiter dropping does not cancel it: the handshake finishes, the connection is cached, and the next call finds it. Running the dial inside the waiter's future throws the expensive half of the work away exactly when a caller has shown it is wanted. |
+| `a_dial_that_fails_is_not_cached`, `every_task_waiting_on_a_failed_dial_is_told` | `tests/client.rs` | A failure caches nothing, and one dial's failure reaches every task waiting on it with that failure's own classification. Caching it makes a briefly unreachable server unreachable for ever; leaving the in-flight marker strands every later caller. |
+| `a_connection_that_died_is_evicted_and_the_next_call_re_dials` | `tests/client.rs` | The actor having terminated evicts the entry, the in-flight call fails as `ConnectionLost` rather than being retried, and the next call re-dials. Without it a long-running consumer is permanently broken after its first idle disconnect — fifteen minutes on a stock Windows server. |
+| `a_connection_idle_past_one_deadline_is_probed_before_it_is_reused` | `tests/client.rs` | The probe, and every value the design fixes about it: `TID = 0xFFFF`, `UID = 0`, `WordCount = 1`, `EchoCount = 1`, `ByteCount = 0`. At any count above one, every reply after the first routes to no request and fails the connection the probe exists to vouch for. |
+| `a_connection_idle_under_one_deadline_is_not_probed` | `tests/client.rs` | The threshold is real. Probing on every reuse puts a round trip in front of every call. |
+| `a_probe_that_fails_evicts_and_the_call_re_dials` | `tests/client.rs` | A failed probe evicts and the call re-dials rather than returning the probe's failure to the caller, which would turn the one thing the probe was for into the caller paying for it anyway. |
+| `concurrent_reuse_of_an_idle_connection_probes_it_once` | `tests/client.rs` | Idleness is read and reset in one act. Reading it without marking the entry used has every task arriving in the same instant send its own echo. |
+| `a_discarded_tree_is_re_opened_and_the_connection_is_left_alone` | `tests/client.rs` | `STATUS_NETWORK_NAME_DELETED` is tree-scoped: it evicts that tree, returns `Error::TreeDisconnected`, and leaves the connection, the other trees on it and their handles alone. Treating it as a lost connection tears down work that is still good; leaving the tree cached has every later call refused by a server that already said it was gone. |
+| `a_deleted_session_fails_the_connection_and_the_next_call_re_dials` | `tests/client.rs` | `STATUS_USER_SESSION_DELETED` is the other scope: session and connection are the same object, so the connection fails and the next call re-dials. |
+| `a_connection_nobody_comes_back_to_is_evicted_and_says_goodbye` | `tests/client.rs` | The sweeper. Nothing in the test touches the cache after the first call, so a lazy sweep at lookup — which visits exactly the entries eviction does not care about — evicts nothing at all. It also pins the order: `TREE_DISCONNECT` before `LOGOFF_ANDX`. |
+| `an_entry_used_inside_the_window_is_never_evicted` | `tests/client.rs` | Idleness is measured from the last use and not from the dial, over ten eviction windows of elapsed time. |
+| `close_awaits_the_goodbye_rather_than_racing_it` | `tests/client.rs` | `close()` waits for the logoff it sent to be answered. A fire-and-forget close reports success while the server still holds the session, and reporting that release is the whole reason the method is fallible. |
+| `close_reports_a_failed_goodbye_and_closes_anyway` | `tests/client.rs` | The failure reaches the caller, the socket closes regardless, and nothing is retried. |
+| `close_does_not_invalidate_a_tree_the_caller_still_holds`, `dropping_the_client_does_not_log_off_a_connection_a_handle_still_holds` | `tests/client.rs` | Both teardown paths check whether anything else holds the connection before the session's goodbye. Sending it anyway invalidates the file, listing and tree handles a caller still owns — the one thing shutdown must not do. |
+| `dropping_the_client_releases_everything_the_cache_held` | `tests/client.rs` | A client dropped rather than closed still says goodbye, best-effort on the actor's close queue, and the socket closes. A sweeper holding a strong reference of its own would keep every cached connection alive for the process's lifetime. |
+| `the_configured_read_ahead_reaches_the_adapters`, `the_configured_buffer_advertisement_reaches_the_session_setup` | `tests/client.rs` | The two `ClientConfig` values that are invisible unless they reach the wire. The second is the threshold at which a reply arrives in several messages at all, and lowering it is the one deliberate way to reach the reassembly path against a live server. |
+| `the_probe_asks_for_one_reply_and_echoes_nothing` | `src/wire/echo.rs` | The probe's body, byte for byte. Nothing else pins it: the reference sends no echo and no fixture carries one, so this is the whole of the encoder's offline evidence. |
+
+**The live half is `tests/live_client.rs`, and it is `#[ignore]`d.** It carries
+the probe's conformance check — a hand-built `SMB_COM_ECHO` under `UID = 0` and
+`TID = 0xFFFF`, and a real operation after it — because that frame has no
+offline oracle at all. Run against the pinned container, a Samba VM, an embedded
+device and Windows 11 24H2, all four answer it `STATUS_SUCCESS` and the session
+is unharmed. The other half of that conformance item — whether a server answers
+an echo on a connection whose session it has discarded — needs a server that can
+be made to discard one, and stays on the conformance script.

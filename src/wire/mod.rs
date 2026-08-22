@@ -36,6 +36,9 @@
 // and that is `#[cfg(test)]`. Dropping it would cost the corpus sweep the
 // coverage it exists for.
 pub mod andx;
+/// `SMB_COM_ECHO`, issued by the connection cache's liveness probe and by
+/// nothing else.
+pub mod echo;
 /// `NT_CREATE_ANDX`, `SMB_COM_CLOSE` and `SMB_COM_RENAME`, issued by `tree.rs`
 /// and `resource/`.
 #[allow(dead_code)]
