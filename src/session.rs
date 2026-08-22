@@ -130,6 +130,16 @@ pub struct SessionOptions {
     /// password to guest access fails the handshake instead of handing back a
     /// session with whatever rights guests have.
     pub allow_guest: bool,
+    /// The `MaxBufferSize` the client advertises in its own session setup.
+    ///
+    /// It tells the server the largest SMB message the client will accept, so it
+    /// — and not anything the server advertises — is the threshold at which a
+    /// reply arrives in several messages at all. It defaults to
+    /// [`ADVERTISED_MAX_BUFFER_SIZE`], the largest the field can carry, and the
+    /// reason to lower it is to reach the reassembly path deliberately: the
+    /// acceptance suite advertises a small one while asking for a large
+    /// `MaxDataCount`, which is that path's live coverage.
+    pub advertised_max_buffer_size: u16,
     /// Whether the tracer writes frame bytes for this run.
     ///
     /// Off by default: a dump of a listing or a read reply carries filenames
@@ -145,6 +155,7 @@ impl Default for SessionOptions {
             connect_timeout: Duration::from_secs(10),
             timeouts: Timeouts::default(),
             allow_guest: false,
+            advertised_max_buffer_size: ADVERTISED_MAX_BUFFER_SIZE,
             dump_wire_bytes: false,
         }
     }
@@ -362,7 +373,7 @@ where
 
     let negotiate_message = ntlm::negotiate_message();
     let mut request = SessionSetupAndx {
-        max_buffer_size: ADVERTISED_MAX_BUFFER_SIZE,
+        max_buffer_size: options.advertised_max_buffer_size,
         max_mpx_count: u16::try_from(negotiated.admission_limit()).unwrap_or(u16::MAX),
         session_key: negotiate.words.session_key,
         capabilities,

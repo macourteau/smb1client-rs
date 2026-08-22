@@ -73,13 +73,84 @@ many tasks the consumer runs.
 ## Invariant 4 — a cancelled write never over-reports
 
 A cancelled write never reports more than the contiguous prefix that reached the
-server, on whichever path can report.
+server, on whichever path can report: the library's own per-request timeout
+carries `written` in its error, and a caller that drops the future reads the
+`WriteProgress` it passed, once that handle signals completion.
 
-**No test exists yet, and this is not a gap in this build step.** Invariant 4 is
-discharged at build step 4: its test needs the same fake transport, with
-controllable per-chunk acknowledgement, but `write_all_at` and `WriteProgress`
-do not exist until that step. The design record says so where it sets the build
-order.
+Every test below drives the same fake transport the three invariants above do,
+with per-chunk acknowledgement under the test's control. The write that gets
+three chunks onto the wire at once is 262,144 bytes — over the 256 KiB threshold
+that decides whether a one-shot call pipelines at all — because an out-of-order
+acknowledgement is not expressible on a serial write.
+
+| Test | File | What it proves, and what a wrong implementation does |
+|---|---|---|
+| `invariant_4_a_timeout_reports_the_prefix_and_not_the_sum` | `tests/write_progress.rs` | The library's own timeout path. The first chunk and the **third** are acknowledged and the second lapses, so a running total says 132,096 bytes reached the server and the contiguous prefix says 130,048. A sum-based implementation reports 132,096 and a caller resuming there never writes the second chunk's bytes; one counting what each chunk *asked* to write reports 262,144 and claims the whole write landed; one returning at the first error rather than draining what is outstanding reports a race rather than a number. |
+| `invariant_4_a_dropped_write_records_through_the_handle` | `tests/write_progress.rs` | **Orphaned's first exit, an arrival that completes the reply**, on the caller-drop path. Ranges are recorded after the future is gone, by the actor applying what the caller arranged to outlive the request. An implementation recording ranges in the awaiting future reports 0; one without a completion signal leaves the caller reading a handle that is still growing. |
+| `invariant_4_an_arrival_that_corrupts_the_reply_still_leaves_the_group` | `tests/write_progress.rs` | **The other half of that exit: an arrival that ends the request without completing the reply.** The middle chunk is answered with the bodyless shape SMB1 answers a failed command with, which acknowledges nothing this crate can read. An implementation leaving the group only on a readable reply hangs `completed()` for ever on that frame; one recording the chunk's requested length whenever the request ends reports 262,144 bytes for a write of which 130,048 landed. |
+| `invariant_4_a_lapse_leaves_the_chunk_group` | `tests/write_progress.rs` | **Orphaned's second exit: the request lapsing.** The chunk leaves the group at the lapse while the request stays in the table holding its multiplex id, so an implementation keying the signal on the request table never fires — on exactly the case the handle exists for. |
+| `invariant_4_the_connection_dying_leaves_the_chunk_group` | `tests/write_progress.rs` | **Orphaned's third exit: the connection dying.** Every request the connection held ends, so every chunk leaves the group. An implementation firing the signal only from a reply hangs for ever here, on the case a caller is likeliest to meet in production. |
+| `invariant_4_a_short_acknowledgement_records_what_the_reply_said` | `tests/write_progress.rs` | **A range is recorded from the reply, not from the request.** A chunk asking to write 130,048 bytes is acknowledged 1,000, and the remainder is re-issued from the first unacknowledged byte. An implementation recording what was asked reports 130,048 bytes as having reached the server, and a caller resuming there skips 129,048 bytes it never wrote. |
+| `invariant_4_one_handle_serves_one_write` | `tests/write_progress.rs` | One handle serves one write for its whole lifetime; a second registration is an `Err` and not a panic, and the refused write puts nothing on the wire. |
+| `invariant_4_a_final_prefix_does_not_grow` | `tests/write_progress.rs` | A prefix already declared final may not grow afterwards — a caller may have resumed from it — and a reply arriving after the lapse records nothing, reaching a request that has already lapsed. |
+
+A caller drop is the **entry** to Orphaned and not an exit from it, which is why
+it appears in every test above rather than as one of the three.
+
+---
+
+## The read fill loop, the listing, and the verbs
+
+Not invariants, but the same distinction applies: each is a rule the design
+states, proven against a server answering *badly* — which no capture can, every
+one of them being a well-behaved exchange.
+
+| Test | File | What it proves, and what a wrong implementation does |
+|---|---|---|
+| `a_short_chunk_is_re_issued_rather_than_read_as_end_of_file` | `tests/resource.rs` | A chunk answered short is re-issued for the bytes it did not return. **This is not defensive**: Windows 11 24H2 serves every `READ_ANDX` `min(asked, 65536)` while accepting a 130,048-byte write, so against that server the path runs on every large read. An implementation reading a short answer as end of file returns 65,536 of 130,048 bytes and loses the rest of the file silently — which is what the reference library does. |
+| `a_chunk_answered_with_zero_bytes_is_never_re_issued` | `tests/resource.rs` | The loop's no-progress guard, read off the covered ranges rather than off the cached size. Re-issuing a zero-byte answer asks the same question for ever; gating the read on the cached length returns `Ok` with a zeroed buffer, which is smb-rs's own defect. |
+| `a_hole_in_the_middle_fails_the_call` | `tests/resource.rs` | Coverage rather than a running total: a middle chunk answering nothing with a later chunk full leaves a hole, and the call fails. A byte-counting loop returns `Ok` with a zero-filled hole in the caller's buffer. |
+| `status_end_of_file_ends_a_whole_file_read_rather_than_failing_it` | `tests/resource.rs` | `STATUS_END_OF_FILE` is a zero-byte answer under a status rather than a count, and `Tree::read` is the one place the fill-or-error rule does not apply. |
+| `a_refused_chunk_downgrades_the_connection_once_and_retries_it` | `tests/resource.rs` | The one-shot downgrade: one of the three statuses that mean a refusal retries that operation once at `MaxBufferSize − 1024` and records the connection small-buffer for its whole life, so nothing is attempted a third time. |
+| `a_server_without_the_capability_asks_for_the_smaller_bound` | `tests/resource.rs` | The chunk size's second case, `min(65,520, MaxBufferSize − 1024)`, which comes from the field that asks for the bytes rather than from the negotiated buffer. |
+| `the_reader_adapter_reports_end_of_file_off_the_wire` | `tests/resource.rs` | The adapter observes the terminal condition itself rather than reading it off a count, and never gates a read on the length the open reported. |
+| `a_listing_ends_on_end_of_search`, `a_listing_ends_on_status_no_more_files` | `tests/resource.rs` | Both directory-chain terminators, and `.` and `..` filtered above the parser. |
+| `an_empty_directory_lists_no_entries_and_no_error` | `tests/resource.rs` | **The no-progress guard counts the entries the server returned, before `.` and `..` are removed.** Counting after the filter turns listing an empty directory — the ordinary case, and one the container produces — into an error. |
+| `a_page_that_returns_nothing_and_does_not_end_fails` | `tests/resource.rs` | Without the guard a server answering `SearchCount = 0` with `EndOfSearch = 0` pages for ever. |
+| `every_find_next2_asks_the_server_to_close_at_end_of_stream` | `tests/resource.rs` | `SMB_FIND_CLOSE_AT_EOS` on the FIND_FIRST2 **and** on every FIND_NEXT2, beside the continuation flag, with the search id and pattern repeated. The reference sets it on the FIND_FIRST2 alone, so every listing longer than one page ends on a request that never asked the server to close — the leak behind its recursive delete's retry loop. |
+| `a_listing_dropped_before_the_end_closes_its_search` | `tests/resource.rs` | The other closing path: `SMB_COM_FIND_CLOSE2` for a listing dropped before end-of-stream, naming the search the FIND_FIRST2 returned. |
+| `deleting_is_an_open_under_delete_on_close_and_then_a_close` | `tests/resource.rs` | Deleting is an open with `DELETE` under `FILE_DELETE_ON_CLOSE` and then a close, with the create option saying which kind of object the open expects — and no stat before it. |
+| `remove_dir_all_drains_a_level_before_it_deletes_from_it` | `tests/resource.rs` | Each level is collected fully and its search closed before anything on it is deleted; a level drained to the end needs no `SMB_COM_FIND_CLOSE2`. |
+| `a_stat_issues_the_two_levels_it_needs` | `tests/resource.rs` | Two queries rather than one, neither level carrying both halves, and `is_dir()` off the attributes. |
+| `clearing_every_attribute_sends_the_value_that_clears_them` | `tests/resource.rs` | `set_attributes(0)` sends `FILE_ATTRIBUTE_NORMAL`: the zero would return success having changed nothing. |
+| `the_volume_query_falls_back_and_says_which_level_answered` | `tests/resource.rs` | The fallback triggers on any error from the modern level, and `FsStatistics::level` says which answered — the only way to tell a real number from a wrapped one on a large volume. |
+| `a_transaction_that_does_not_fit_one_message_fails_before_the_wire` | `tests/resource.rs` | Both transaction limits are enforced where the request is built. A long path is the realistic way the one-message rule breaks, and it fails locally naming the limit rather than being truncated or split. |
+| `a_path_that_escapes_the_share_is_refused_before_the_wire` | `tests/resource.rs` | The three path refusals, none of which reaches the wire. |
+| `a_dropped_file_enqueues_its_close` | `tests/resource.rs` | `Drop` hands the close to the actor without awaiting or spawning. |
+| `the_query_path_parameters_are_the_captured_ones`, `a_stat_reads_its_two_halves_off_the_two_captured_replies` | `src/wire/info.rs` | The TRANS2 information parameter blocks against the committed capture, byte for byte, and the two reply levels decoded off the frames the container sent. |
+
+**Two wire paths still have no offline oracle**, as the design record says:
+`SMB_COM_FIND_CLOSE2` and `SMB_COM_ECHO`. The first is exercised against all
+four live servers by `a_dropped_listing_closes_its_search_on_a_live_server` in
+`tests/live_filesystem.rs`, which is the only evidence there is that a real
+server accepts what this crate builds from the specification.
+
+## The live half — `tests/live_filesystem.rs`
+
+`#[ignore]`d and driven from the environment, like the rest of the acceptance
+suite. It carries the container acceptance checks the design record names, and
+it is what proves the four client-side wire changes no server in the corpus has
+been observed to accept: the permissive `ShareAccess` of `0x7`, a
+`DesiredAccess` without `SYNCHRONIZE`, `SMB_FIND_CLOSE_AT_EOS` on a FIND_NEXT2,
+and `SMB_COM_FIND_CLOSE2` itself.
+
+| Test | What it covers |
+|---|---|
+| `a_live_share_lists_and_stats` | Listing, stat, `exists`, and the volume query. Read-only, so it is the one test safe to point at a device holding somebody's data. |
+| `a_dropped_listing_closes_its_search_on_a_live_server` | Both closing paths against a real server. |
+| `a_live_server_takes_the_whole_write_path` | Create, write, read back, `read_exact_at` across chunk boundaries, both adapters through `tokio::io::copy`, stat, rename, listing, an empty directory, and `remove_dir_all`. It writes only under its own scratch directory and removes what it creates; `SMB1_TEST_READ_ONLY` skips it. |
+| `the_seeded_directory_lists_every_entry` | The container's own acceptance check: the seeded 600-entry directory returns **600**, which needs paging and reassembly both, and the empty directory beside it returns no entries and no error. |
+| `a_small_advertised_buffer_reaches_the_reassembly_path` | **The live coverage for reassembly**: the client advertises a `MaxBufferSize` of 4,356 while the transaction still asks for a `MaxDataCount` of 65,472, so a page that would otherwise arrive whole arrives in fragments — at the port's own advertisement, against a real server. |
 
 ---
 

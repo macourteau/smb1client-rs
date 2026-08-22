@@ -13,7 +13,8 @@
 
 use binrw::binrw;
 
-use super::{WireError, from_utf16, read_words, write_words};
+use super::header::command;
+use super::{Message, WireError, body, from_utf16, read_words, write_words};
 
 /// TRANS2 subcommand `TRANS2_FIND_FIRST2`.
 pub const SUBCOMMAND_FIND_FIRST2: u16 = 0x0001;
@@ -370,6 +371,60 @@ pub fn walk_entries(data: &[u8], search_count: u16) -> Result<Vec<DirectoryEntry
         });
     }
     Ok(entries)
+}
+
+/// An `SMB_COM_FIND_CLOSE2` request, which releases a search the server still
+/// holds.
+///
+/// It is a standalone SMB command and not a TRANS2 subcommand, and it has no
+/// offline oracle of any kind: the reference library's `EncodeFindClose2` is
+/// shaped as a TRANS2 parameter block, has no production caller anywhere, and
+/// its own source records that sending the real thing would need a new command
+/// type. So that encoder is evidence the command was never sent rather than a
+/// reference for sending it, and this is written from \[MS-CIFS\] 2.2.4.55.
+///
+/// It is the other half of closing a search. The half that covers a listing
+/// drained to its end is `SMB_FIND_CLOSE_AT_EOS` on the FIND_FIRST2 and on
+/// every FIND_NEXT2; this covers the listing dropped before then, which lazy
+/// listing makes ordinary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FindClose2Request {
+    /// The search to release, as the FIND_FIRST2 reply named it.
+    pub sid: u16,
+}
+
+impl FindClose2Request {
+    /// Encodes the command body. One word, and an empty byte area.
+    pub fn encode_body(&self) -> Result<Vec<u8>, WireError> {
+        Ok(body(&self.sid.to_le_bytes(), &[]))
+    }
+
+    /// Decodes a find-close request.
+    pub fn decode(message: &Message) -> Result<Self, WireError> {
+        message.expect_words(command::FIND_CLOSE2, &[1], "1")?;
+        Ok(Self {
+            sid: u16::from_le_bytes([message.words()[0], message.words()[1]]),
+        })
+    }
+}
+
+/// A find-close response, which carries nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FindClose2Response;
+
+impl FindClose2Response {
+    /// Decodes a find-close response.
+    ///
+    /// Zero words is this command's successful shape, not the error shape.
+    pub fn decode(message: &Message) -> Result<Self, WireError> {
+        message.expect_words(command::FIND_CLOSE2, &[0], "0")?;
+        Ok(Self)
+    }
+
+    /// Encodes the command body.
+    pub fn encode_body(&self) -> Result<Vec<u8>, WireError> {
+        Ok(body(&[], &[]))
+    }
 }
 
 /// Drops the trailing null unit of a UTF-16LE string, if there is one.

@@ -16,6 +16,8 @@
 //! its own right.
 
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -31,7 +33,7 @@ use crate::wire::{self, Message};
 
 use super::reassembly::Assembly;
 use super::table::RequestTable;
-use super::{Connection, Dispatch, Error, Negotiated, Reply, Timeouts};
+use super::{Connection, Dispatch, Error, Negotiated, Reply, RequestOutcome, Timeouts};
 
 /// How many closes may reach the wire in a row while a request waits behind
 /// them.
@@ -158,6 +160,7 @@ struct Queued {
     command: u8,
     reply: Option<oneshot::Sender<Result<Reply, Error>>>,
     assembly: Option<Assembly>,
+    outcome: Option<Arc<dyn RequestOutcome>>,
 }
 
 /// The frame the actor is putting on the socket.
@@ -248,6 +251,7 @@ where
         requests,
         closes,
         negotiated,
+        downgraded: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -343,6 +347,9 @@ where
                 "caller dropped before dispatch; command {:#04x} is not sent",
                 request.command
             );
+            if let Some(outcome) = &request.outcome {
+                outcome.ended(Err(&Error::Lost));
+            }
             return Ok(());
         }
 
@@ -359,8 +366,12 @@ where
                 Err(error) => {
                     // Nothing reached the socket, so the multiplex id was never
                     // used and the failure is this request's alone.
+                    let error = Error::from(error);
+                    if let Some(outcome) = &request.outcome {
+                        outcome.ended(Err(&error));
+                    }
                     if let Some(reply) = reply {
-                        let _ = reply.send(Err(error.into()));
+                        let _ = reply.send(Err(error));
                     }
                     return Ok(());
                 }
@@ -383,6 +394,7 @@ where
                 command: request.command,
                 reply,
                 assembly,
+                outcome: request.outcome,
             }),
         });
         Ok(())
@@ -414,6 +426,7 @@ where
                 queued.command,
                 queued.reply,
                 queued.assembly,
+                queued.outcome,
                 now,
             );
         }

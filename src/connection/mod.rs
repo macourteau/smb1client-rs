@@ -32,6 +32,9 @@ mod reassembly;
 mod table;
 pub mod transport;
 
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -39,6 +42,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::status::NtStatus;
 use crate::wire::{Message, WireError};
 
+pub(crate) use reassembly::Coverage;
 pub use reassembly::ReassemblyError;
 
 /// The default per-request timeout: the span of silence after which a request
@@ -54,6 +58,34 @@ pub const DEFAULT_OVERALL_DEADLINE: Duration = Duration::from_secs(300);
 /// Its job is to bound reassembly memory: a request holding a reassembly buffer
 /// is a request charging capacity.
 pub const ADMISSION_CEILING: usize = 50;
+
+/// `CAP_LARGE_READX`, which lifts a read chunk off the negotiated buffer.
+pub const CAP_LARGE_READX: u32 = 0x0000_4000;
+
+/// `CAP_LARGE_WRITEX`, the write half of the same.
+pub const CAP_LARGE_WRITEX: u32 = 0x0000_8000;
+
+/// The chunk size a large-I/O capability buys: the NetBIOS frame limit less the
+/// reservation a message's own headers take.
+///
+/// Carried from the reference's `MaxDataSize` with the reservation already
+/// taken, rather than recomputed from the 131,071-byte inbound ceiling.
+pub const LARGE_IO_CHUNK: usize = 130_048;
+
+/// What a chunk asks for where the capability is absent.
+///
+/// It comes from the field that asks for the bytes rather than from the
+/// negotiated buffer: `MaxCountOfBytesToReturn` is 16 bits without the
+/// capability.
+pub const SMALL_IO_CHUNK: usize = 65_520;
+
+/// What a message's own headers take out of the buffer before any payload does.
+///
+/// Asking for exactly `MaxBufferSize` overruns it by however much of it they
+/// take. Neither subtraction below is guarded, and neither needs to be: a
+/// `MaxBufferSize` under the 4,356-byte SMB1 minimum failed the connection when
+/// the negotiate response arrived.
+pub const PROTOCOL_OVERHEAD: u32 = 1_024;
 
 /// The two timing bounds the connection works to.
 ///
@@ -118,7 +150,7 @@ impl Negotiated {
 /// the word block, the `ByteCount` and the byte area. The header is the
 /// connection's to build: it assigns the multiplex id at dispatch, and nothing
 /// above it may.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Request {
     command: u8,
     tid: u16,
@@ -126,6 +158,24 @@ pub struct Request {
     body: Vec<u8>,
     max_parameter_count: u16,
     max_data_count: u16,
+    outcome: Option<Arc<dyn RequestOutcome>>,
+}
+
+/// What a caller arranged to outlive a request it may stop waiting for.
+///
+/// Dropping a future withdraws nothing from the wire, so a request whose caller
+/// has gone still reaches a terminal outcome — its reply, its own lapse, or the
+/// connection ending it — and something has to be able to observe that after
+/// the caller is no longer there to. The actor applies this hook exactly once,
+/// whichever way the request ends and whether or not anybody was still waiting,
+/// so the two paths cannot record different things.
+///
+/// A late reply to a request that has already lapsed applies nothing: the hook
+/// was applied at the lapse, which is the terminal outcome as far as the caller
+/// is concerned.
+pub(crate) trait RequestOutcome: fmt::Debug + Send + Sync {
+    /// The request ended.
+    fn ended(&self, outcome: Result<&Reply, &Error>);
 }
 
 impl Request {
@@ -144,6 +194,7 @@ impl Request {
             body,
             max_parameter_count: 0,
             max_data_count: 0,
+            outcome: None,
         }
     }
 
@@ -170,12 +221,20 @@ impl Request {
             body,
             max_parameter_count,
             max_data_count,
+            outcome: None,
         }
     }
 
     /// The command this request carries.
     pub fn command(&self) -> u8 {
         self.command
+    }
+
+    /// Arranges for `outcome` to be applied when this request ends, whether or
+    /// not its caller is still waiting by then.
+    pub(crate) fn outliving(mut self, outcome: Arc<dyn RequestOutcome>) -> Self {
+        self.outcome = Some(outcome);
+        self
     }
 }
 
@@ -243,6 +302,14 @@ impl Reply {
     /// stripped. Absolute offsets inside a message are measured against this.
     pub fn message(&self) -> &[u8] {
         self.message.as_bytes()
+    }
+
+    /// The parsed message, for the per-command decoders.
+    ///
+    /// They read it rather than re-parsing [`Reply::message`], which costs
+    /// little on a share list and a great deal on a 64 KB read.
+    pub(crate) fn parsed(&self) -> &Message {
+        &self.message
     }
 
     /// The reassembled transaction blocks, where the reply carried any.
@@ -349,12 +416,69 @@ pub struct Connection {
     /// that discards when full — the silent-loss shape invariant 2 forbids.
     closes: mpsc::UnboundedSender<Dispatch>,
     negotiated: Negotiated,
+    /// Whether this connection has been recorded small-buffer, which a server
+    /// refusing a large read or write does for the connection's whole life.
+    /// Shared, because the record belongs to the connection and not to whichever
+    /// handle met the refusal.
+    downgraded: Arc<AtomicBool>,
 }
 
 impl Connection {
     /// What the handshake negotiated.
     pub fn negotiated(&self) -> Negotiated {
         self.negotiated
+    }
+
+    /// The largest payload one `READ_ANDX` on this connection asks for.
+    pub fn read_chunk_size(&self) -> usize {
+        self.chunk_size(CAP_LARGE_READX)
+    }
+
+    /// The largest payload one `WRITE_ANDX` on this connection carries.
+    pub fn write_chunk_size(&self) -> usize {
+        self.chunk_size(CAP_LARGE_WRITEX)
+    }
+
+    /// The three cases the chunk size has.
+    ///
+    /// With the large-I/O capability the bound is the NetBIOS frame rather than
+    /// the negotiated buffer — a 130,108-byte read reply against a 16,644-byte
+    /// negotiated buffer is what says so. Without it the bound is the 16-bit
+    /// field that asks for the bytes, under the reservation. After the one-shot
+    /// downgrade it is the negotiated buffer under that same reservation, which
+    /// is the only case that changes what a capability-bearing server is asked
+    /// for.
+    fn chunk_size(&self, capability: u32) -> usize {
+        let buffered = self
+            .negotiated
+            .max_buffer_size
+            .saturating_sub(PROTOCOL_OVERHEAD) as usize;
+        if self.downgraded.load(Ordering::Relaxed) {
+            return buffered;
+        }
+        if self.negotiated.capabilities & capability != 0 {
+            LARGE_IO_CHUNK
+        } else {
+            buffered.min(SMALL_IO_CHUNK)
+        }
+    }
+
+    /// Whether the chunk size a request is about to be issued at is already the
+    /// downgraded one. A chunk issued at the small size has no second attempt
+    /// to make.
+    pub(crate) fn is_downgraded(&self) -> bool {
+        self.downgraded.load(Ordering::Relaxed)
+    }
+
+    /// Records the connection small-buffer, which a server refusing a large
+    /// read or write does once and for the connection's whole life.
+    pub(crate) fn record_small_buffer(&self) {
+        if !self.downgraded.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "the server refused a large read or write; every later chunk on this connection \
+                 is bounded by MaxBufferSize less the protocol overhead"
+            );
+        }
     }
 
     /// Issues one request and waits for its reply.

@@ -19,6 +19,7 @@
 //! fails, and there is nothing else to transition.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::oneshot;
@@ -30,7 +31,7 @@ use crate::wire::Message;
 use crate::wire::transaction::TransactionResponse;
 
 use super::reassembly::{Assembly, Progress};
-use super::{Error, Reply, Timeouts, TransactionBody};
+use super::{Error, Reply, RequestOutcome, Timeouts, TransactionBody};
 
 /// The multiplex ids that may be issued: every 16-bit value but `0xFFFF`, which
 /// \[MS-CIFS\] reserves for server-initiated oplock-break notifications.
@@ -92,6 +93,11 @@ struct Entry {
     /// The reassembly, for a transaction. It outlives a lapse with its buffer
     /// released, because coverage is what says the reply arrived whole.
     assembly: Option<Assembly>,
+    /// What the caller arranged to outlive the request, applied exactly once
+    /// when the request ends — whichever way it ends and whether or not anybody
+    /// is still waiting. It is taken there, so a late reply to a request that
+    /// has already lapsed applies nothing.
+    outcome: Option<Arc<dyn RequestOutcome>>,
     state: State,
 }
 
@@ -253,7 +259,12 @@ impl Entry {
     /// there was never anything to cancel.
     fn deliver(&mut self, mid: u16, outcome: Result<Reply, Error>) {
         let waiter = match &mut self.state {
-            State::OnWire { reply, .. } => reply.take(),
+            State::OnWire { reply, .. } => {
+                if let Some(arranged) = self.outcome.take() {
+                    arranged.ended(outcome.as_ref());
+                }
+                reply.take()
+            }
             State::Lapsed { .. } => {
                 debug!(
                     mid,
@@ -356,6 +367,7 @@ impl RequestTable {
         command: u8,
         reply: Option<oneshot::Sender<Result<Reply, Error>>>,
         assembly: Option<Assembly>,
+        outcome: Option<Arc<dyn RequestOutcome>>,
         now: Instant,
     ) {
         let silence_at = now + self.timeouts.per_request;
@@ -366,6 +378,7 @@ impl RequestTable {
             Entry {
                 command,
                 assembly,
+                outcome,
                 state: State::OnWire {
                     reply,
                     silence_at,
