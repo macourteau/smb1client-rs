@@ -62,6 +62,25 @@ TCP port 445 only; port 139 NetBIOS session transport is a non-goal. A server is
 reachable over IPv6 only by a hostname that resolves to one, SMB1's UNC syntax
 admitting no literal form.
 
+## Checking a server of your own
+
+Some of what this crate does turns on what a *particular* server makes of a wire
+choice it sends and the Go original never did, and no committed evidence can
+settle those. `examples/conformance.rs` carries them, run by hand rather than in
+CI:
+
+```sh
+cargo run --example conformance -- \
+    --server 192.168.0.10 --share testshare --user smbtest --password secret
+```
+
+It prints, for each check, what it asserts, what the server did, and a verdict —
+and says a check is unrunnable rather than passing it where that server cannot
+exercise it. Add `--read-only` against a server holding data that matters: it
+then creates, modifies and deletes nothing, and skips the checks that would have
+written. Run one instance at a time against Windows, which does not take kindly
+to a second SMB1 handshake from a host that already has one open.
+
 ## Licence
 
 `MIT OR Apache-2.0`.
