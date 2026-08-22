@@ -1,0 +1,297 @@
+# The MS-FSCC cross-validation, taken once and kept as values.
+#
+# The design considered `smb-fscc` as a dev-dependency test oracle for its
+# independently validated MS-FSCC struct layouts and **rejected it**: pinning
+# does not stop a bot raising pull requests, and every `0.x` minor would be held
+# for a human — precisely the cost that rejected the smb-rs family as a runtime
+# dependency, re-entering through the development door. What it prescribes
+# instead is this file: the cross-validation run once during implementation,
+# its results committed as plain expected values beside the fixture bytes.
+#
+# **How it was run.** `smb-fscc 0.11.2` was taken into a scratch copy of this
+# crate outside the repository, and the crate's own decoders were run against
+# the same bytes as its `FileBothDirectoryInformation`,
+# `FileBasicInformation`, `FileStandardInformation`, `FileFsSizeInformation`
+# and `FileEndOfFileInformation`, field by field. Every field below agreed.
+# There is no `Cargo.toml` entry for it here and there is not meant to be one:
+# the value was taken once and the subscription dropped.
+#
+# **The bytes are the committed corpus's**, not synthesised, except where a
+# line says otherwise. Three FIND replies were cross-validated in full — 113
+# entries between them, from two server implementations — and only the first
+# three entries of each are pinned here, the run having compared them all.
+#
+# **It is a partial oracle, and the limits below are measured rather than
+# assumed.** Where it cannot speak to something this file says so instead of
+# forcing an agreement.
+#
+# Format: one `name = value` per line. `#` opens a comment.
+
+
+# ---------------------------------------------------------------------------
+# What the crate could not validate. Each was run and each is the run's result.
+# ---------------------------------------------------------------------------
+
+# 1. The chained-list container. `ChainedItemList<T>` reads until a zero
+#    `NextEntryOffset`, which SMB2 guarantees; an SMB1 FIND reply need not carry
+#    one, and neither Samba corpus does — the last entry's offset runs to
+#    exactly the end of the data block. So the container does not merely need
+#    special-casing, it fails outright with "failed to fill whole buffer", on
+#    the six-entry root listing and on the hundred-entry fragmented one alike.
+#    The cross-validation therefore read each entry on its own, at the offsets
+#    this crate's walker produced. What bounds this crate's walk is the data
+#    block's length as well as the terminator, and that is why.
+fscc_chained_list_decodes_an_smb1_find_reply = false
+samba_root_chain_is_zero_terminated = false
+samba_root_chain_last_offset = 664
+samba_root_chain_data_length = 664
+
+# 2. The information-class numbers. Its enum carries SMB2's, and every level
+#    this port sends is SMB1's, so no class number could be compared.
+fscc_both_directory_class = 0x0003
+smb1_both_directory_class = 0x0104
+fscc_basic_class = 0x0004
+smb1_query_basic_class = 0x0101
+fscc_standard_class = 0x0005
+smb1_query_standard_class = 0x0102
+
+# 3. The `EaSize` field of a directory entry. MS-FSCC gives that offset to
+#    `ReparseTag` when `FILE_ATTRIBUTE_REPARSE_POINT` is set and to `EaSize`
+#    otherwise, and `smb-fscc` switches on the attribute. [MS-CIFS] 2.2.8.1.7
+#    defines `SMB_FIND_FILE_BOTH_DIRECTORY_INFO` with `EaSize` and no such
+#    variant, so this port reads `EaSize` unconditionally and the two disagree
+#    on a reparse-point entry by construction. Measured on an entry from the
+#    corpus with the attribute set by hand: the port reports `EaSize`, the
+#    crate reports a reparse tag and no `EaSize` at all.
+fscc_reparse_point_entry_reports_ea_size = false
+port_reparse_point_entry_ea_size = 0
+
+# 4. The 8.3 short name. Its `FixedWideString<12>` reads all twelve units
+#    whatever `ShortNameLength` says, so it cannot validate the trim this crate
+#    does. What it did validate is that this crate's trimmed name is what
+#    remains of those twelve units once the padding is removed, which held on
+#    all 113 entries. One entry in the corpus carries a short name at all — the
+#    Windows listing's `gamma-longer-name.dat`, whose twelve units fill the
+#    field exactly and so are the one place the two readings coincide. Every
+#    other entry reports a length of zero against twelve units of padding,
+#    which is where they do not.
+fscc_short_name_honours_the_length_field = false
+fscc_short_name_field_units = 12
+samba_short_names_are_all_empty = true
+windows_root_short_names_are_all_empty = false
+
+# 5. `SMB_INFO_ALLOCATION` (`0x0001`), the legacy level `Tree::statistics`
+#    falls back to. It is SMB1-only and MS-FSCC defines no equivalent, so the
+#    crate has nothing to compare against and this level is validated by the
+#    fixture corpus and the live acceptance run alone.
+fscc_has_an_smb_info_allocation_equivalent = false
+
+
+# ---------------------------------------------------------------------------
+# `SMB_FIND_FILE_BOTH_DIRECTORY_INFO` (`0x104`), the level every listing rule
+# in the design is written against.
+#
+# The fixed part is 94 bytes before the name, which is the four-byte
+# `NextEntryOffset` plus the ninety MS-FSCC gives
+# `FileBothDirectoryInformation`. Nothing else in this file depends on a
+# stride: the walk follows `NextEntryOffset` because Samba pads to 4 and
+# Windows mostly to 8.
+# ---------------------------------------------------------------------------
+
+entry_fixed_length = 94
+
+# --- Samba 4.23.8, the share root. `fixtures/capture/0010-s2c-cmd32.bin`,
+# --- data block of 664 bytes at offset 68, SearchCount 6, EndOfSearch 1.
+samba_root_entry_count = 6
+
+samba_root_0_name = .
+samba_root_0_file_index = 0
+samba_root_0_creation_time = 134316996144774760
+samba_root_0_last_access_time = 134316996145224760
+samba_root_0_last_write_time = 134316996144774760
+samba_root_0_change_time = 134316996144774760
+samba_root_0_end_of_file = 0
+samba_root_0_allocation_size = 0
+samba_root_0_attributes = 0x00000010
+samba_root_0_ea_size = 0
+
+samba_root_1_name = ..
+samba_root_1_file_index = 0
+samba_root_1_creation_time = 134316996144774760
+samba_root_1_last_access_time = 134316996145224760
+samba_root_1_last_write_time = 134316996144774760
+samba_root_1_change_time = 134316996144774760
+samba_root_1_end_of_file = 0
+samba_root_1_allocation_size = 0
+samba_root_1_attributes = 0x00000010
+samba_root_1_ea_size = 0
+
+# `alpha.txt` is the seed's `hello world`, which is why its length is 11 — an
+# independent statement about the same eleven bytes.
+samba_root_2_name = alpha.txt
+samba_root_2_file_index = 0
+samba_root_2_creation_time = 134316996144764760
+samba_root_2_last_access_time = 134316996145234760
+samba_root_2_last_write_time = 134316996144764760
+samba_root_2_change_time = 134316996144774760
+samba_root_2_end_of_file = 11
+samba_root_2_allocation_size = 4096
+samba_root_2_attributes = 0x00000080
+samba_root_2_ea_size = 0
+
+# --- Windows 11 24H2, the share root. `fixtures/capture-win-b/0012-s2c-cmd32.bin`,
+# --- data block of 788 bytes at offset 68, SearchCount 7, EndOfSearch 1.
+#
+# The second implementation matters here: Windows pads its entries differently
+# and reports different attributes for the same shape of directory, so a walker
+# that had learnt Samba's stride would fail on it.
+windows_root_entry_count = 7
+
+windows_root_0_name = .
+windows_root_0_creation_time = 134317058125549556
+windows_root_0_last_access_time = 134317058126963466
+windows_root_0_last_write_time = 134317058126963466
+windows_root_0_change_time = 134317058126963466
+windows_root_0_end_of_file = 0
+windows_root_0_allocation_size = 0
+windows_root_0_attributes = 0x00000010
+windows_root_0_ea_size = 0
+
+# The share root's parent, which Windows reports hidden and system as well as
+# a directory. It is what `SearchAttributes = 0x16` exists to admit.
+windows_root_1_name = ..
+windows_root_1_creation_time = 134317166803110959
+windows_root_1_last_access_time = 134317058125549556
+windows_root_1_last_write_time = 134317058125549556
+windows_root_1_change_time = 134317058125549556
+windows_root_1_end_of_file = 0
+windows_root_1_allocation_size = 0
+windows_root_1_attributes = 0x00000016
+windows_root_1_ea_size = 0
+
+# The same eleven bytes as Samba's, under a different attribute word and a
+# 16-byte allocation rather than a 4,096-byte one.
+windows_root_2_name = alpha.txt
+windows_root_2_creation_time = 134317058125908021
+windows_root_2_last_access_time = 134317058125943105
+windows_root_2_last_write_time = 134317058125943105
+windows_root_2_change_time = 134317058125943105
+windows_root_2_end_of_file = 11
+windows_root_2_allocation_size = 16
+windows_root_2_attributes = 0x00000020
+windows_root_2_ea_size = 0
+
+# The one entry in the whole corpus with an 8.3 name. `ShortNameLength` is in
+# bytes and the field is twelve UTF-16 units, so 24 fills it exactly.
+windows_root_5_name = gamma-longer-name.dat
+windows_root_5_short_name = GAMMA-~1.DAT
+windows_root_5_short_name_length_bytes = 24
+
+# --- Samba, the fragmented hundred-entry page. The data block is the two
+# --- messages `fixtures/capture-frag/0010-s2c-cmd32.bin` and `0011-...`
+# --- reassembled — 16,572 plus 1,264 bytes, `TotalDataCount` 17,836 —
+# --- SearchCount 100, EndOfSearch 0. The 93rd entry straddles the boundary,
+# --- so this is also the cross-validation of the reassembled buffer.
+samba_fragmented_entry_count = 100
+
+samba_fragmented_0_name = .
+samba_fragmented_0_creation_time = 134317006224581660
+samba_fragmented_0_last_access_time = 134317006225091660
+samba_fragmented_0_last_write_time = 134317006224581660
+samba_fragmented_0_change_time = 134317006224591660
+samba_fragmented_0_end_of_file = 0
+samba_fragmented_0_allocation_size = 0
+samba_fragmented_0_attributes = 0x00000010
+samba_fragmented_0_ea_size = 0
+
+samba_fragmented_1_name = ..
+samba_fragmented_1_creation_time = 134317006223881660
+samba_fragmented_1_last_access_time = 134317006224581660
+samba_fragmented_1_last_write_time = 134317006223881660
+samba_fragmented_1_change_time = 134317006224591660
+samba_fragmented_1_end_of_file = 0
+samba_fragmented_1_allocation_size = 0
+samba_fragmented_1_attributes = 0x00000010
+samba_fragmented_1_ea_size = 0
+
+# The 42-character name length is load-bearing for the corpus and is what makes
+# a hundred-entry Samba reply large enough to need more than one message.
+samba_fragmented_2_name = fixture-entry-with-a-longish-name-0403.dat
+samba_fragmented_2_name_length = 42
+samba_fragmented_2_creation_time = 134317006224361660
+samba_fragmented_2_last_access_time = 134317006224361660
+samba_fragmented_2_last_write_time = 134317006224361660
+samba_fragmented_2_change_time = 134317006224581660
+samba_fragmented_2_end_of_file = 1
+samba_fragmented_2_allocation_size = 4096
+samba_fragmented_2_attributes = 0x00000080
+samba_fragmented_2_ea_size = 0
+
+
+# ---------------------------------------------------------------------------
+# `SMB_QUERY_FILE_BASIC_INFO` (`0x0101`), the first of the two queries a
+# `Tree::metadata` issues. `fixtures/capture/0012-s2c-cmd32.bin`.
+#
+# The special case is the length: MS-FSCC's `FileBasicInformation` carries a
+# trailing reserved `u32` and the SMB1 reply does not, so the container answers
+# this level with 36 bytes rather than 40 and the cross-validation padded the
+# block before handing it over. Requiring the fifth word back would refuse a
+# conforming reply.
+# ---------------------------------------------------------------------------
+
+basic_length_on_the_wire = 36
+fscc_basic_structure_length = 40
+basic_creation_time = 134316996144764760
+basic_last_access_time = 134316996145234760
+basic_last_write_time = 134316996144764760
+basic_change_time = 134316996144774760
+basic_attributes = 0x00000080
+
+
+# ---------------------------------------------------------------------------
+# `SMB_QUERY_FILE_STANDARD_INFO` (`0x0102`), the second.
+# `fixtures/capture/0014-s2c-cmd32.bin`. Here the two lengths agree: the
+# container answers 24 bytes, which is MS-FSCC's structure including its
+# trailing reserved `u16`, so no special case was needed.
+#
+# The two levels describe the same file, which is what makes them a
+# cross-check of each other: `alpha.txt` at 11 bytes with a 4,096-byte
+# allocation and `FILE_ATTRIBUTE_NORMAL`.
+# ---------------------------------------------------------------------------
+
+standard_length_on_the_wire = 24
+standard_allocation_size = 4096
+standard_end_of_file = 11
+standard_number_of_links = 1
+standard_delete_pending = false
+standard_directory = false
+
+
+# ---------------------------------------------------------------------------
+# `FILE_END_OF_FILE_INFORMATION` (`0x0104` as a set-file level), which is what
+# `File::set_len` sends. Its data is the new length as eight little-endian
+# bytes and nothing else. No captured frame carries one, so the block below is
+# constructed; what the cross-validation proves is the encoding, against a
+# value chosen to catch a byte-order or width mistake in either direction.
+# ---------------------------------------------------------------------------
+
+end_of_file_information_length = 8
+end_of_file_information_value = 4886718345
+end_of_file_information_hex = 8967452301000000
+
+
+# ---------------------------------------------------------------------------
+# `SMB_QUERY_FS_SIZE_INFO` (`0x0103`), which `Tree::statistics` prefers.
+#
+# No committed fixture carries this level, so the block is constructed from the
+# geometry the acceptance container reported during the step-4 differential run
+# — 512 bytes per sector, two sectors per allocation unit. The multiplication
+# the verb does once for every caller is pinned with it.
+# ---------------------------------------------------------------------------
+
+fs_size_block_hex = b06bec7d00000000d481ed74000000000200000000020000
+fs_size_total_units = 2112646064
+fs_size_free_units = 1961722324
+fs_size_sectors_per_unit = 2
+fs_size_bytes_per_sector = 512
+fs_size_total_bytes = 2163349569536

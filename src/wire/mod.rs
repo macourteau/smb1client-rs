@@ -73,6 +73,9 @@ pub mod tree;
 #[cfg(test)]
 mod fixtures;
 
+#[cfg(test)]
+mod fscc_cross_check;
+
 use binrw::BinRead;
 use binrw::io::Cursor;
 
