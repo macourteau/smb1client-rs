@@ -24,11 +24,16 @@ const LEVEL: u32 = 1;
 
 /// `PreferedMaximumLength`, the "no limit of my own" spelling.
 ///
-/// The client declines to cap the reply, so what decides whether the paging
-/// loop is entered at all is the server's own idea of how much it will return.
-/// A smaller figure would only page more often: the SMB layer beneath already
-/// bounds any single reply, by the transaction ceiling in the transact mode and
-/// by the pipe read that collects it in the other.
+/// The value the reference sends and every capture carries. **Bounding it was
+/// tried and does not work**: Samba 4.23.8 returns the whole share list whatever
+/// this field says — measured at 64 KiB and again at 4 KiB against a container
+/// with 2,000 shares, both answered in one reply of several hundred kilobytes.
+/// A client therefore cannot use this field to keep a reply small, so the
+/// assembler in [`super::pdu`] carries that bound instead, where it does not
+/// rest on a server's cooperation.
+///
+/// The paging loop below is still reached — by a server that pages of its own
+/// accord, which is what `ERROR_MORE_DATA` and the resume handle are for.
 const NO_PREFERRED_MAXIMUM: u32 = 0xFFFF_FFFF;
 
 /// A referent id for a pointer this crate sends.

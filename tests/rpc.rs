@@ -593,6 +593,18 @@ async fn a_refused_transact_falls_through_to_write_and_read() {
     let attempt = peer.request(TRANSACTION).await;
     peer.send(&refusal(&attempt, NtStatus::NOT_SUPPORTED)).await;
 
+    // **The pipe is closed and reopened before the second transport runs.** The
+    // trigger for the fall-through is any error from the transact attempt, and
+    // one raised after the response began arriving leaves the tail of it on the
+    // pipe — where the next request would be written behind it, and the read
+    // after that would land mid-stream. A refusal like this one leaves nothing
+    // behind, but the client cannot tell the two apart from the outside, so it
+    // reopens either way and pays a round trip on the unlikely path.
+    let reset = peer.request(CLOSE).await;
+    peer.send(&refusal(&reset, NtStatus::SUCCESS)).await;
+    let reopen = peer.request(NT_CREATE_ANDX).await;
+    peer.send(&nt_create_reply(&reopen)).await;
+
     let write = peer.request(WRITE_ANDX).await;
     peer.send(&write_reply(&write, written_bytes(&write))).await;
     let read = peer.request(READ_ANDX).await;
@@ -950,6 +962,11 @@ async fn both_paths_failing_says_why_each_did() {
     let attempt = peer.request(TRANSACTION).await;
     peer.send(&refusal(&attempt, NtStatus::INVALID_HANDLE))
         .await;
+    // The reopen between the two transports, as above.
+    let reset = peer.request(CLOSE).await;
+    peer.send(&refusal(&reset, NtStatus::SUCCESS)).await;
+    let reopen = peer.request(NT_CREATE_ANDX).await;
+    peer.send(&nt_create_reply(&reopen)).await;
     let write = peer.request(WRITE_ANDX).await;
     peer.send(&refusal(&write, NtStatus::SMB_BAD_FID)).await;
     let close = peer.request(CLOSE).await;

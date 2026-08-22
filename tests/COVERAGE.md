@@ -217,6 +217,17 @@ are the parts a server with many shares reaches first, and where a port without
 them truncates silently, so each is covered by a hand-built stream in
 `tests/rpc.rs` and in `rpc::pdu`'s own tests.
 
+**A server with many shares has since been built, and it found what the fixtures
+could not.** A Samba 4.23.8 container carrying a few thousand share definitions
+enumerates over DCE/RPC — RAP gives way first, a list that size not fitting its
+reply either — and at 2,000 shares it failed outright against an assembly bounded
+by a count of 64 fragments, which at the negotiated fragment size is 274 KB.
+Bounding the reply from the client side does not help: `PreferedMaximumLength` is
+advisory and Samba ignores it, measured at both 64 KiB and 4 KiB. The bound is
+bytes now, and 2,000, 3,000 and 6,000 shares all enumerate. Reproduce it with
+`.ci/samba/many-shares.sh 2000`, then `examples/list_shares` against
+`127.0.0.1:10446`.
+
 Each of those tests was checked by mutation — the wrong implementation written
 into the source, the suite run, the source restored:
 
@@ -229,6 +240,9 @@ into the source, the suite run, the source restored:
 | One pipe read and no loop, as the reference has it | eight of the eleven in `tests/rpc.rs` |
 | The RAP fall-through narrowed to `STATUS_NOT_SUPPORTED`, as the reference has it | `rap_more_data_falls_through_rather_than_enumerating_nothing`, `a_rap_reply_short_of_its_own_available_count_falls_through` |
 | The transact fall-through narrowed the same way | `both_paths_failing_says_why_each_did` |
+| The assembly bounded by a count of 64 fragments rather than by bytes | `a_reply_in_more_fragments_than_a_count_cap_allowed_still_assembles` |
+| The byte bound removed | `a_reply_past_the_stub_cap_fails_rather_than_accumulating` |
+| The pipe re-used rather than reopened between the two transports | `a_refused_transact_falls_through_to_write_and_read`, `both_paths_failing_says_why_each_did` |
 | A `bind_ack` on NDR64 accepted | `a_bind_ack_on_another_transfer_syntax_is_refused` |
 | A reply returning more shares than it says it holds accepted | `a_total_below_the_entries_returned_is_refused` |
 

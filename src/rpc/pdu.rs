@@ -29,14 +29,34 @@ const REQUEST_PROLOGUE: usize = 8;
 /// presentation context id, a cancel count and a reserved byte.
 const RESPONSE_PROLOGUE: usize = 8;
 
+/// The most assembled stub bytes accepted for one reply.
+///
+/// The bound on this layer's allocation, and the one that decides whether a
+/// legitimate reply fits. It is expressed in bytes rather than in fragments
+/// because the fragment is not the client's unit: the server picks how finely
+/// it splits a reply, so a fragment count bounds an amount of data that only
+/// the server decides.
+///
+/// **A count was tried and was wrong.** A cap of 64 fragments was carried over
+/// from the connection layer's reassembly guard on the reasoning that
+/// `frag_length` is 16 bits, so 64 of them could not exceed four megabytes. At
+/// the 4,280-byte fragment this crate actually negotiates that cap admits 274
+/// KB, and a server with 2,000 shares answers `NetrShareEnum` with more than
+/// that in one reply — so share enumeration failed outright against a server
+/// whose only unusual property was having a lot of shares. Bounding the reply
+/// from the client side does not help: `PreferedMaximumLength` is advisory and
+/// Samba ignores it (see [`super::srvsvc`]).
+const STUB_CAP: usize = 8 * 1_024 * 1_024;
+
 /// The most PDUs accepted for one reply.
 ///
 /// A liveness guard against a server that never sets `PFC_LAST_FRAG`, in the
 /// same register as the connection layer's cap of 64 fragments on one
-/// transaction reassembly and carried from it. It is also what bounds this
-/// layer's allocation: `frag_length` is 16 bits, so 64 PDUs cannot assemble
-/// more than four megabytes however large a share list a server claims to have.
-const PDU_CAP: usize = 64;
+/// transaction reassembly. It is derived from [`STUB_CAP`] and the smallest
+/// fragment worth sending so the two agree by construction: a stream that never
+/// completes trips whichever of them it reaches first, and neither can be the
+/// reason a reply that fits is refused.
+const PDU_CAP: usize = STUB_CAP / (MAX_FRAGMENT as usize - HEADER_LEN - RESPONSE_PROLOGUE) + 1;
 
 /// `rpc_vers` and `rpc_vers_minor`: connection-oriented DCE/RPC 5.0.
 const VERSION: (u8, u8) = (5, 0);
@@ -159,6 +179,10 @@ pub enum PduError {
     /// More PDUs than one reply may be split into.
     #[error("the response exceeded {PDU_CAP} PDUs without completing")]
     TooManyFragments,
+
+    /// More assembled stub than one reply may carry.
+    #[error("the response exceeded {STUB_CAP} bytes without completing")]
+    StubTooLarge,
 
     /// A PDU ended inside its own body.
     #[error("{part} needs {needed} bytes and the PDU holds {length}")]
@@ -497,6 +521,11 @@ impl Collector {
                 needed: HEADER_LEN + prologue,
                 length: fragment.len(),
             })?;
+        // Checked before the copy, so a reply past the bound is refused rather
+        // than allocated and then refused.
+        if self.payload.len() + payload.len() > STUB_CAP {
+            return Err(PduError::StubTooLarge);
+        }
         self.payload.extend_from_slice(payload);
         self.complete = header.flags & PFC_LAST_FRAG != 0;
         Ok(())
@@ -818,6 +847,68 @@ mod tests {
         let stub = srvsvc::tests::build(&[], 0, 0, 0);
         let reply = response_fragment(1, PFC_LAST_FRAG, &stub);
         assert_eq!(collect(1, &[&reply]), Err(PduError::NotFirstFragment));
+    }
+
+    /// **A reply split more finely than a fragment count anticipates still
+    /// assembles.**
+    ///
+    /// The bound on this layer is bytes, and this is why. An earlier version
+    /// capped one reply at 64 fragments on the reasoning that `frag_length` is
+    /// 16 bits, so 64 of them could not exceed four megabytes — but the size
+    /// this crate negotiates is 4,280, so the cap admitted 274 KB, and a server
+    /// with 2,000 shares answers `NetrShareEnum` with more than that in one
+    /// reply. Share enumeration failed outright against it. How finely a reply
+    /// is split is the server's choice and not the client's, so a fragment
+    /// count bounds an amount of data the client never picked.
+    ///
+    /// Two hundred fragments is past any count a 64-fragment cap admits and
+    /// nowhere near the byte bound.
+    #[test]
+    fn a_reply_in_more_fragments_than_a_count_cap_allowed_still_assembles() {
+        const FRAGMENTS: usize = 200;
+        const PER_FRAGMENT: usize = 512;
+
+        let fragments: Vec<Vec<u8>> = (0..FRAGMENTS)
+            .map(|index| {
+                let flags = match index {
+                    0 => PFC_FIRST_FRAG,
+                    _ if index == FRAGMENTS - 1 => PFC_LAST_FRAG,
+                    _ => 0,
+                };
+                response_fragment(1, flags, &vec![index as u8; PER_FRAGMENT])
+            })
+            .collect();
+        let borrowed: Vec<&[u8]> = fragments.iter().map(Vec::as_slice).collect();
+
+        let answer = collect(1, &borrowed).expect("the reply assembled");
+        assert_eq!(answer.payload.len(), FRAGMENTS * PER_FRAGMENT);
+        assert_eq!(
+            answer.payload[PER_FRAGMENT * 199],
+            199,
+            "the last fragment's bytes are in the assembled stub"
+        );
+    }
+
+    /// **A reply past the byte bound is refused rather than accumulated.**
+    ///
+    /// The fragments here are larger than the size this crate negotiates, which
+    /// is what makes the byte bound the one that trips: `frag_length` is the
+    /// server's field and nothing obliges it to respect what the bind asked
+    /// for. Split finely instead, a stream that never ends trips the fragment
+    /// count above — and the two are derived from each other so that whichever
+    /// arrives first, the memory this layer can be made to hold is the same.
+    #[test]
+    fn a_reply_past_the_stub_cap_fails_rather_than_accumulating() {
+        let mut collector = Collector::new(1);
+        let stub = vec![0xAA; 32 * 1_024];
+        for round in 0..=(STUB_CAP / stub.len()) {
+            let flags = if round == 0 { PFC_FIRST_FRAG } else { 0 };
+            if let Err(error) = collector.feed(&response_fragment(1, flags, &stub)) {
+                assert_eq!(error, PduError::StubTooLarge);
+                return;
+            }
+        }
+        panic!("the cap of {STUB_CAP} bytes was never reached");
     }
 
     /// The liveness guard: a server that never sets `PFC_LAST_FRAG` is stopped

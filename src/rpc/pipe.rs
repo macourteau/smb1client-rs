@@ -19,6 +19,14 @@
 //! `STATUS_NOT_SUPPORTED` ever recorded here was earned by a client sending the
 //! transaction with no `Name` at all.
 //!
+//! **Because the trigger is that wide, the pipe is reopened before the second
+//! attempt.** The mode exists for a server that refuses the transaction, and a
+//! refusal leaves the pipe as it was — but the same trigger fires on an error
+//! raised once the response has begun arriving, and there the pipe still holds
+//! the tail of what was abandoned. Writing the next request behind it is how one
+//! clear failure becomes two confusing ones, the second of them a PDU carrying
+//! no `PFC_FIRST_FRAG`.
+//!
 //! **The pipe-read loop owns `STATUS_BUFFER_OVERFLOW`.** In the write/read mode
 //! it arrives on the `READ_ANDX`, which is not a transaction at all; in the
 //! transact mode it arrives on a *completed* `SMB_COM_TRANSACTION` whose pipe
@@ -86,6 +94,8 @@ pub struct Pipe {
     /// Why the transact mode was abandoned, kept so that a failure of both
     /// transports still says what the first one was.
     transact_failure: Option<Error>,
+    /// The pipe's name, kept so the fall-through can reopen it.
+    name: String,
 }
 
 impl Pipe {
@@ -94,6 +104,22 @@ impl Pipe {
     /// `name` is the pipe's name relative to the tree, `\srvsvc` for share
     /// enumeration.
     pub async fn open(connection: Connection, tid: u16, uid: u16, name: &str) -> Result<Self> {
+        let fid = Self::open_fid(&connection, tid, uid, name).await?;
+        Ok(Self {
+            connection,
+            tid,
+            uid,
+            fid,
+            offset: 0,
+            transact: true,
+            transact_failure: None,
+            name: name.to_owned(),
+        })
+    }
+
+    /// Opens the pipe and returns its file id, for both the first open and the
+    /// reopen the fall-through makes.
+    async fn open_fid(connection: &Connection, tid: u16, uid: u16, name: &str) -> Result<u16> {
         let request = NtCreateAndxRequest {
             flags: 0,
             root_directory_fid: 0,
@@ -120,15 +146,26 @@ impl Pipe {
         }
         let opened = NtCreateAndxResponse::decode(reply.parsed())?;
         debug!(fid = opened.fid, name, "named pipe opened");
-        Ok(Self {
-            connection,
-            tid,
-            uid,
-            fid: opened.fid,
-            offset: 0,
-            transact: true,
-            transact_failure: None,
-        })
+        Ok(opened.fid)
+    }
+
+    /// Closes the pipe and opens it again, so the transport that follows starts
+    /// on a stream with nothing left on it.
+    ///
+    /// The fall-through below is written for a server that *refuses* the
+    /// transact mode, and a refusal leaves the pipe as it was. An error raised
+    /// after the response began arriving does not: the next request would go
+    /// into a pipe still holding the tail of the abandoned one, and the read
+    /// after it would land mid-stream on a PDU carrying no `PFC_FIRST_FRAG`.
+    /// Reopening costs a round trip on the unlikely path and needs no claim
+    /// about which errors leave the pipe clean — which is a claim this crate is
+    /// in no position to make, the two modes being told apart by what the server
+    /// did rather than by how far it got.
+    async fn reopen(&mut self) -> Result<()> {
+        Self::release(&self.connection, self.tid, self.uid, self.fid).await;
+        self.fid = Self::open_fid(&self.connection, self.tid, self.uid, &self.name).await?;
+        self.offset = 0;
+        Ok(())
     }
 
     /// Releases the pipe.
@@ -137,29 +174,29 @@ impl Pipe {
     /// handle when the connection goes, so a failed close costs a handle until
     /// then and nothing the caller can act on.
     pub async fn close(self) {
+        Self::release(&self.connection, self.tid, self.uid, self.fid).await;
+    }
+
+    /// Releases one file id, for both the close above and the reopen.
+    async fn release(connection: &Connection, tid: u16, uid: u16, fid: u16) {
         let request = CloseRequest {
-            fid: self.fid,
+            fid,
             last_time_modified: LEAVE_TIME_ALONE,
         };
         let body = match request.encode_body() {
             Ok(body) => body,
             Err(error) => {
-                warn!(fid = self.fid, "encoding the pipe close failed: {error}");
+                warn!(fid, "encoding the pipe close failed: {error}");
                 return;
             }
         };
-        let reply = self
-            .connection
-            .request(Request::new(command::CLOSE, self.tid, self.uid, body))
+        let reply = connection
+            .request(Request::new(command::CLOSE, tid, uid, body))
             .await;
         match reply {
             Ok(reply) if reply.status() == NtStatus::SUCCESS => {}
-            Ok(reply) => warn!(
-                fid = self.fid,
-                "the server refused the pipe close: {}",
-                reply.status()
-            ),
-            Err(error) => warn!(fid = self.fid, "the pipe close did not complete: {error}"),
+            Ok(reply) => warn!(fid, "the server refused the pipe close: {}", reply.status()),
+            Err(error) => warn!(fid, "the pipe close did not complete: {error}"),
         }
     }
 
@@ -176,6 +213,14 @@ impl Pipe {
                     );
                     self.transact = false;
                     self.transact_failure = Some(error);
+                    // The transact attempt may have got far enough to leave the
+                    // tail of a response on the pipe, and writing the next
+                    // request behind it is how one clear failure becomes two
+                    // confusing ones. A reopen fails the call rather than
+                    // proceeding on a stream whose state is unknown.
+                    if let Err(error) = self.reopen().await {
+                        return Err(self.both_failed(error));
+                    }
                 }
             }
         }
@@ -183,14 +228,20 @@ impl Pipe {
         let mut collector = Collector::new(call_id);
         match self.write_read_call(request, &mut collector).await {
             Ok(()) => collector.finish().map_err(protocol),
-            Err(second) => Err(match self.transact_failure.take() {
-                Some(first) => Error::BothAttemptsFailed {
-                    operation: "the DCE/RPC exchange on the named pipe",
-                    first: Box::new(first),
-                    second: Box::new(second),
-                },
-                None => second,
-            }),
+            Err(second) => Err(self.both_failed(second)),
+        }
+    }
+
+    /// Reports a failure of the write/read mode beside whatever the transact
+    /// mode failed with, where there was one.
+    fn both_failed(&mut self, second: Error) -> Error {
+        match self.transact_failure.take() {
+            Some(first) => Error::BothAttemptsFailed {
+                operation: "the DCE/RPC exchange on the named pipe",
+                first: Box::new(first),
+                second: Box::new(second),
+            },
+            None => second,
         }
     }
 
