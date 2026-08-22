@@ -124,9 +124,12 @@ async fn a_chunk_answered_with_zero_bytes_is_never_re_issued() {
         .await
         .unwrap()
         .expect_err("the span could not be filled");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    // Ordinary end of file, not a server sending nonsense: `std`'s `read_exact`
+    // answers `UnexpectedEof` when it runs out, and this method carries `std`'s
+    // contract along with its name.
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     assert!(
-        error.to_string().contains("4096 bytes at 0"),
+        error.to_string().contains("4096 bytes at offset 0"),
         "the error names the uncovered range: {error}"
     );
 
@@ -175,9 +178,13 @@ async fn a_hole_in_the_middle_fails_the_call() {
     assert!(
         error
             .to_string()
-            .contains(&format!("{CHUNK} bytes at {CHUNK}")),
+            .contains(&format!("{CHUNK} bytes at offset {CHUNK}")),
         "the error names the hole: {error}"
     );
+    // A hole is an unfilled span, not a server that sent nonsense: `std` answers
+    // `UnexpectedEof` for a `read_exact` that ran out and this method carries
+    // `std`'s contract along with its name.
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 /// **`STATUS_END_OF_FILE` is a zero-byte answer under a status rather than a

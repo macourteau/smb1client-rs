@@ -119,6 +119,26 @@ pub enum Error {
     #[error("the server sent a message this crate could not decode: {0}")]
     Protocol(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    /// A read could not fill the span it was given.
+    ///
+    /// `read_exact_at` carries no count, so this is how a caller learns that a
+    /// span reached past what the file holds — which is ordinary end of file,
+    /// not a server misbehaving. It is its own variant for that reason: routing
+    /// it through [`Error::Protocol`] made `kind()` answer `InvalidData`, which
+    /// reads as "the server sent garbage" for the commonest thing a read can
+    /// do. `std`'s own `read_exact` answers `UnexpectedEof` here, and this
+    /// method takes `std`'s contract along with its name.
+    ///
+    /// A hole in the middle of the span and a short far end are the same
+    /// outcome to a caller and only the message distinguishes them.
+    #[error("the read could not fill {length} bytes at offset {at} of the span asked for")]
+    UnfilledSpan {
+        /// Where the first uncovered range begins, relative to the span.
+        at: usize,
+        /// How many bytes of it never arrived.
+        length: usize,
+    },
+
     /// A path the caller gave was refused before anything reached the wire.
     ///
     /// Absolute paths, paths carrying a null byte, paths that escape the share
@@ -230,6 +250,9 @@ impl Error {
             Error::ConnectTimeout | Error::RequestTimeout => io::ErrorKind::TimedOut,
             Error::Io(error) => error.kind(),
             Error::Protocol(_) => io::ErrorKind::InvalidData,
+            // `std`'s answer for a `read_exact` that ran out, and this method
+            // carries `std`'s contract.
+            Error::UnfilledSpan { .. } => io::ErrorKind::UnexpectedEof,
             Error::GuestLogon => io::ErrorKind::PermissionDenied,
             Error::SigningRequired | Error::UnsupportedServer(_) => io::ErrorKind::Unsupported,
             // The second attempt is the one that decided the outcome, so it is
@@ -272,6 +295,7 @@ impl Error {
             Error::BothAttemptsFailed { second, .. } => second.status(),
             Error::WritePartial { source, .. } => source.status(),
             Error::TransactionTooLarge { .. }
+            | Error::UnfilledSpan { .. }
             | Error::ConnectTimeout
             | Error::RequestTimeout
             | Error::Io(_)

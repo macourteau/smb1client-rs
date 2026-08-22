@@ -430,15 +430,6 @@ enum ReadError {
         /// How many bytes.
         length: usize,
     },
-
-    /// The span was not covered once every issued chunk had answered.
-    #[error("the read could not fill {length} bytes at {at} of the span asked for")]
-    Incomplete {
-        /// Where the first uncovered range begins.
-        at: usize,
-        /// How long it is.
-        length: usize,
-    },
 }
 
 /// What a write can fail with that no status names.
@@ -517,10 +508,10 @@ impl File {
         let fill = self.handle.read_span(buffer, offset, depth).await?;
         match fill.covered.gap(wanted) {
             None => Ok(()),
-            Some((at, end)) => Err(Error::Protocol(Box::new(ReadError::Incomplete {
+            Some((at, end)) => Err(Error::UnfilledSpan {
                 at,
                 length: end - at,
-            }))),
+            }),
         }
     }
 
