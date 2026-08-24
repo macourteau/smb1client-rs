@@ -46,4 +46,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600
+      # `cargo fuzz` defaults `--target` to the triple it was itself built for,
+      # and the prebuilt binary installed above is a musl one. Left to default it
+      # therefore builds the fuzzers against a musl std that this gnu toolchain
+      # does not carry — and a sanitizer cannot instrument a statically linked
+      # libc in any case, so the two errors arrive together. Naming the host
+      # triple keeps the fuzzers on the toolchain actually installed.
+      - run: |
+          cargo fuzz run --target "$(rustc -vV | sed -n 's/^host: //p')" \
+            ${{ matrix.target }} -- -max_total_time=600
