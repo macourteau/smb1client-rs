@@ -49,10 +49,24 @@ jobs:
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
           echo "$verdict: $reason"
 
+      # Same reasoning release-plz.yml already records for the release PR: a
+      # merge authored by GITHUB_TOKEN starts no workflow runs, so the push to
+      # main never triggered Release and an auto-merged bump would sit
+      # unpublished until a human pushed. Reuses the release-plz App rather than
+      # adding a second credential; continue-on-error keeps auto-merge working
+      # on GITHUB_TOKEN if the App is ever unavailable.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        if: steps.decide.outputs.verdict == 'merge'
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+
       - name: Approve and enable auto-merge
         if: steps.decide.outputs.verdict == 'merge'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           gh pr review "$PR_URL" --approve
